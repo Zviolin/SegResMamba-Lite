@@ -1,0 +1,93 @@
+# ==========================================
+# Git Ignore - SegResMamba-Lite Project
+# ==========================================
+
+# Python缓存
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.zip
+.Python
+
+# 模型权重（大文件，推荐用 Git LFS）
+*.pth
+*.pt
+*.ckpt
+*.bin
+*.h5
+*.hdf5
+*.npz
+*.npy
+
+# 训练过程中的输出目录（这些会很大）
+*/pipeline/models/
+*/pipeline/logs/
+*/pipeline/evaluation_results/
+*/pipeline/__pycache__/
+*/pipeline/*/__pycache__/
+*/pipeline/*/*/__pycache__/
+*/pipeline/*/*/*/__pycache__/
+
+# 系统文件
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 临时文件
+*.tmp
+*.bak
+*.log  # 注意：pip 临时日志也被排除
+*.pid
+
+# 编译输出
+build/
+dist/
+*.egg-info/
+*.egg
+
+# 测试输出
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# 虚拟环境
+venv/
+env/
+ENV/
+.venv/
+
+# 数据集（不要上传原始数据）
+*.nii.gz
+*.nii
+*.mhd
+*.mha
+*.dcm
+*.dicom
+
+# 配置文件（含密钥）
+.env
+.env.local
+*.secret
+credentials.json
+
+# Cache
+.cache/
+.mamba/
+.pyrit_cache/
+
+# 训练监控
+runs/
+wandb/
+logs/
+
+# Docker
+.dockerignore
