@@ -1,0 +1,52 @@
+# SegResMamba-Lite WebAPP - Docker Compose
+# 待开发：完整编排将在此文件中定义
+
+version: '3.8'
+
+services:
+  # frontend:
+  #   build: ./frontend
+  #   ports:
+  #     - "3000:3000"
+  #   depends_on:
+  #     - backend
+  #   environment:
+  #     - REACT_APP_API_URL=http://localhost:8000
+
+  # backend:
+  #   build: ./backend
+  #   ports:
+  #     - "8000:8000"
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: 1
+  #             capabilities: [gpu]
+  #   environment:
+  #     - CUDA_VISIBLE_DEVICES=0
+  #     - MODEL_VERSION=v8
+  #     - INIT_FILTERS=20
+
+  # db:
+  #   image: postgres:15
+  #   environment:
+  #     - POSTGRES_DB=segresmamba
+  #     - POSTGRES_USER=admin
+  #     - POSTGRES_PASSWORD=secret
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+
+  # redis:
+  #   image: redis:7-alpine
+
+  # nginx:
+  #   image: nginx:alpine
+  #   ports:
+  #     - "80:80"
+  #   volumes:
+  #     - ./nginx.conf:/etc/nginx/nginx.conf
+
+# volumes:
+#   postgres_data:
