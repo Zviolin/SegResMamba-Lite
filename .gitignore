@@ -83,6 +83,7 @@ credentials.json
 .cache/
 .mamba/
 .pyrit_cache/
+.triton_cache/
 
 # 训练监控
 runs/

@@ -39,12 +39,16 @@ class OptimizedTrainer:
         ema_decay=0.999,
         use_deep_supervision=False,
         non_blocking=True,
+        version=None,
+        lb_weight=0.01,
     ):
         self.device = device
         self.max_epochs = max_epochs
         self.use_ema = use_ema
         self.use_deep_supervision = use_deep_supervision
         self.non_blocking = non_blocking if device == "cuda" else False
+        self.version = version
+        self.lb_weight = lb_weight
 
         self.model = model.to(device)
         self.loss_fn = get_loss(loss_name)
@@ -122,6 +126,10 @@ class OptimizedTrainer:
         with torch.amp.autocast('cuda', enabled=(self.device == "cuda")):
             outputs = self.model(inputs)
             loss = self.compute_loss(outputs, labels)
+            # V9/V10/V11 稀疏路由：接入负载均衡损失（防止路由坍缩/专家饿死）
+            if self.version in ('v9', 'v10', 'v11') and self.lb_weight > 0 and hasattr(self.model, 'get_moe_load_balance_loss'):
+                lb_loss = self.model.get_moe_load_balance_loss()
+                loss = loss + self.lb_weight * lb_loss
 
         self.scaler.scale(loss).backward()
         self.scaler.step(self.optimizer)

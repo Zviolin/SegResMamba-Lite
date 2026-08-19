@@ -312,7 +312,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="SegResMamba 评估")
     parser.add_argument("--model", type=str, default="segresmamba_lite", help="模型名称")
     parser.add_argument("--version", type=str, default="v2",
-                        choices=["v1", "v2", "v3", "v4", "v6", "v7", "v8"],
+                        choices=["v1", "v2", "v3", "v4", "v6", "v7", "v8", "v9", "v10", "v11"],
                         help="模型版本")
     parser.add_argument("--resolution", type=float, default=2.0, help="分辨率")
     parser.add_argument("--checkpoint", type=str, default=None, help="检查点路径")

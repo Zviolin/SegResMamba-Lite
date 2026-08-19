@@ -71,6 +71,7 @@ def train(
     v6_gamma=0.2,
     v6_focal_alpha=0.25,
     v6_focal_gamma=2.0,
+    lb_weight=0.01,               # V9 MoE 负载均衡损失权重（0 表示关闭）
     # ═══════════════════════════════════════════════════════════════════════
     # 设备参数
     # ═══════════════════════════════════════════════════════════════════════
@@ -251,6 +252,8 @@ def train(
         use_ema=use_ema,
         use_deep_supervision=use_deep_supervision,
         non_blocking=True,
+        version=version,
+        lb_weight=lb_weight,
         **loss_kwargs,
     )
 
@@ -357,7 +360,7 @@ def main():
     parser = argparse.ArgumentParser(description="SegResMamba-Lite Training")
     parser.add_argument("--model", type=str, default="segresmamba_lite", help="模型名称")
     parser.add_argument("--version", type=str, default="v2",
-                        choices=["v1", "v2", "v3", "v4", "v6", "v7", "v8"],
+                        choices=["v1", "v2", "v3", "v4", "v6", "v7", "v8", "v9", "v10", "v11"],
                         help="模型版本")
     parser.add_argument("--resolution", type=float, default=2.0, help="数据分辨率")
     parser.add_argument("--init_filters", type=int, default=None, help="初始滤波器数量")
@@ -390,6 +393,8 @@ def main():
     parser.add_argument("--v6_alpha", type=float, default=0.5, help="V6Loss: Dice 权重")
     parser.add_argument("--v6_beta", type=float, default=0.3, help="V6Loss: Focal 权重")
     parser.add_argument("--v6_gamma", type=float, default=0.2, help="V6Loss: Boundary 权重")
+    parser.add_argument("--lb_weight", type=float, default=0.01,
+                        help="V9 MoE 负载均衡损失权重（默认 0.01，0 表示关闭）")
     args = parser.parse_args()
 
     train(
@@ -416,6 +421,7 @@ def main():
         v6_alpha=args.v6_alpha,
         v6_beta=args.v6_beta,
         v6_gamma=args.v6_gamma,
+        lb_weight=args.lb_weight,
     )
 
 
