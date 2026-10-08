@@ -32,6 +32,9 @@ __pycache__/
 # 清理备份区（无用日志/权重待删除区，不入库）
 _cleanup_*/
 
+# 个人审查报告/建议文档（仅本地留存，不入库）
+OtherSuggests/
+
 # Triton kernel 编译缓存（可自动再生成）
 .triton_cache/
 
