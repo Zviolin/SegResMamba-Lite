@@ -6,7 +6,7 @@
 
 本目录是 `SegResMamba-Lite` 项目的 **Web 应用配套**分支（`webapp` 分支）。
 
-基于 V6/V8 MoA 模型，提供：
+基于 V10（最终模型，论文级 token 级稀疏 MoA，1.42M 参数），提供：
 - 📤 **上传**脑部 MRI（nii.gz 格式）
 - 🎯 **自动分割**肿瘤区域（WT/TC/ET）
 - 📊 **可视化** 3D 分割结果
@@ -36,7 +36,7 @@ WebAPP/
 │ │ │ ├── segment.py      # 分割接口
 │ │ │ └── report.py       # 报告接口
 │ │ ├── models/             # 模型加载
-│ │ │ ├── loader.py       # V6/V8 加载
+│ │ │ ├── loader.py       # V10 加载
 │ │ │ └── inference.py    # 推理封装
 │ │ ├── utils/              # 工具
 │ │ └── main.py
@@ -71,7 +71,7 @@ docker-compose up -d
 | 缓存 | Redis（任务队列）|
 | 反向代理 | Nginx |
 | 容器化 | Docker + Docker Compose |
-| 模型推理 | V6/V8 + ONNX Runtime |
+| 模型推理 | V10 + ONNX Runtime |
 
 ## 📦 API 接口（规划）
 
@@ -92,7 +92,7 @@ Content-Type: application/json
 
 {
   "case_id": "BraTS_001",
-  "model": "v8",
+  "model": "v10",
   "init_filters": 20
 }
 ```
@@ -103,18 +103,19 @@ Content-Type: application/json
 GET /api/v1/report/{case_id}
 ```
 
-## 📊 V6 vs V8 模型选择
+## 📊 模型选择（V10 为最终模型）
 
 | 场景 | 推荐版本 | 理由 |
 |------|---------|------|
-| **稳定生产** | **V6** | Dice 0.8904, HD95 4.28 |
-| **学术研究** | V8 | α 自由自适应（创新） |
-| **批量处理** | V6 + ONNX | 推理速度优化 |
+| **稳定生产** | **V10** | 最终模型：全局 Dice 0.8878、HD95 7.90、LW Dice 0.8304 全系列最高（官方 374mm 满罚口径） |
+| **批量处理** | V10 + ONNX | 推理速度优化 |
+
+> 注：V8 权重未留存，无法部署；完整版本对比见 experiments 分支 `SegResMamba-Lite/论文实验章节.md`。
 
 ## 📚 关联项目
 
-- 模型代码：[experiments 分支](../experiments)
-- Android 客户端：[android 分支](../android)
+- 模型代码：[experiments 分支](https://github.com/Zviolin/SegResMamba-Lite/tree/experiments)
+- Android 客户端：[App 分支](https://github.com/Zviolin/SegResMamba-Lite/tree/App)
 
 ---
 

@@ -1,0 +1,115 @@
+# ==========================================
+# Git Ignore - SegResMamba-Lite (WebAPP Branch)
+# ==========================================
+# WebAPP = 前端(React/Vue) + 后端(FastAPI) + Docker
+
+# ----- Node / 前端 -----
+node_modules/
+.pnp
+.pnp.js
+.yarn/install-state.gz
+dist/
+build/
+.next/
+out/
+.nuxt/
+.cache/
+.parcel-cache/
+coverage/
+.eslintcache
+.stylelintcache
+
+# 包管理锁文件（按需保留 package-lock.json / yarn.lock / pnpm-lock.yaml）
+# pnpm-lock.yaml
+
+# ----- Python / 后端 -----
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# 虚拟环境
+venv/
+env/
+ENV/
+.venv/
+
+# 模型权重
+*.pth
+*.pt
+*.onnx
+*.ckpt
+*.bin
+*.h5
+*.hdf5
+*.npz
+*.npy
+
+# 训练 / 推理产物
+*/pipeline/models/
+*/pipeline/logs/
+*/pipeline/evaluation_results/
+backend/uploads/
+backend/outputs/
+
+# ----- 数据集 -----
+*.nii.gz
+*.nii
+*.mhd
+*.mha
+*.dcm
+*.dicom
+data/raw/
+data/processed/
+
+# ----- Docker -----
+.dockerignore
+
+# ----- 系统 / IDE -----
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.bak
+*.tmp
+
+# ----- 凭据 / 环境变量 -----
+.env
+.env.local
+.env.*.local
+*.secret
+credentials.json
+secrets/
+
+# ----- 日志 -----
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# ----- 监控 / 训练 -----
+runs/
+wandb/
+.mlflow/
+
+# ----- 缓存 / 服务 -----
+.cache/
+.mamba/
+.pyrit_cache/
+.triton_cache/
+.redis/
