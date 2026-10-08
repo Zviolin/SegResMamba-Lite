@@ -247,6 +247,11 @@ python pipeline/evaluate.py --resolution 2.0 --cache --base-channels 32 --checkp
 | `--weight-decay` | 1e-5 | AdamW 权重衰减 |
 | `--swa` | False | 启用权重平均（等权滑动平均，SWA 式；历史命名 EMA，CLI 已改名） |
 | `--device` | auto | 设备（cuda/cpu） |
+| `--seed` | 42 | 训练随机种子（--deterministic 时生效，不影响数据划分缓存） |
+| `--deterministic` | False | 确定性训练：固定种子 + cudnn.deterministic + 确定性算法 + CUBLAS_WORKSPACE_CONFIG（不触碰 TF32，保持论文口径可比） |
+| `--cache_parent` | `""` | 缓存父目录覆盖：命令行 > 环境变量 SRTP_CACHE_PARENT > 历史默认；最终目录 = `{parent}_{分辨率}[_{max_samples}]`（与 `--max-samples` 采样目录正交） |
+| `--skip_nonfinite` | False | 跳过非有限 loss（NaN/Inf）的 batch：不 backward/不更新/不进平均权重，epoch 指标按有效 step 平均 |
+| `--best_weights` | `raw` | best_metric_model.pth 保存来源：raw=原始权重（历史口径）/ avg=验证所用的平均权重（SWA，需配合 --swa，未启用时回退 raw） |
 
 ### evaluate.py
 
@@ -254,7 +259,11 @@ python pipeline/evaluate.py --resolution 2.0 --cache --base-channels 32 --checkp
 |------|--------|------|
 | `--checkpoint` | `pipeline/models/2.0mm_full_cuda/best_metric_model.pth` | 检查点路径 |
 | `--no-lesion-wise` | False | 禁用 lesion-wise 指标 |
+| `--cache_parent` | `""` | 缓存父目录覆盖：命令行 > 环境变量 SRTP_CACHE_PARENT > 历史默认；最终目录 = `{parent}_{分辨率}[_{max_samples}]`（与 `--max-samples` 采样目录正交） |
+| `--data_root` | `""` | 原始 BraTS TrainingData 目录覆盖：命令行 > 环境变量 BRATS_DATA_ROOT > 历史默认；本项目评估为纯缓存驱动，此参数仅保持跨项目口径一致 |
 | 其他 | - | 与 train.py 一致 |
+
+> 以上 `--deterministic` / `--cache_parent` / `--skip_nonfinite` / `--best_weights`（及 evaluate 的 `--cache_parent` / `--data_root`）为 2026-10-08 跨卡实验包合并引入的可选开关，默认关闭时不带任何新参数的命令行为与历史逐位一致；换机迁移用命令行参数或环境变量重定向，不改变各项目历史数据划分绑定。
 
 ### gen_cache.py
 

@@ -185,6 +185,13 @@ python SegResNet-DiceFocal-AdamW-SWA-DS/pipeline/train.py --resolution 2.0 --cac
 | `--device` | str | None | 设备（cuda/cpu，None=自动选择） |
 | `--model_dir` | str | `""` | 自定义权重保存目录（空=默认 `pipeline/models/{分辨率}mm_{设备}`） |
 | `--log_name` | str | `""` | 自定义日志名称前缀（空=默认 `train_optimized_{分辨率}mm`） |
+| `--seed` | int | `42` | 训练随机种子（--deterministic 时生效，不影响数据划分缓存） |
+| `--deterministic` | flag | False | 确定性训练：固定种子 + cudnn.deterministic + 确定性算法 + CUBLAS_WORKSPACE_CONFIG（不触碰 TF32，保持论文口径可比） |
+| `--cache_parent` | str | `""` | 缓存父目录覆盖：命令行 > 环境变量 SRTP_CACHE_PARENT > 历史默认；最终目录 = `{parent}_{分辨率}` |
+| `--skip_nonfinite` | flag | False | 跳过非有限 loss（NaN/Inf）的 batch：不 backward/不更新/不进平均权重，epoch 指标按有效 step 平均 |
+| `--best_weights` | str | `raw` | best_metric_model.pth 保存来源：raw=原始权重（历史口径）/ avg=验证所用的平均权重（SWA，需 `--swa`，否则回退 raw） |
+
+> 以上 `--deterministic` / `--cache_parent` / `--skip_nonfinite` / `--best_weights`（及 evaluate 的 `--cache_parent`/`--data_root`）为 2026-10-08 跨卡实验包合并引入的可选开关，默认关闭时不带任何新参数的命令行为与历史逐位一致；换机迁移用命令行参数或环境变量重定向，不改变各项目历史数据划分绑定。
 
 ### 7.2 pipeline/evaluate.py
 
@@ -198,6 +205,8 @@ python SegResNet-DiceFocal-AdamW-SWA-DS/pipeline/train.py --resolution 2.0 --cac
 | `--device` | str | None | 设备（cuda/cpu，None=自动选择） |
 | `--no_lesion_wise` | flag | False | 禁用 lesion-wise 指标 |
 | `--runs` | int | `1` | 评估次数（>1 时额外报告均值±标准差，但逐病例 CSV 仅 runs=1 时写出） |
+| `--cache_parent` | str | `""` | 缓存父目录覆盖：命令行 > 环境变量 SRTP_CACHE_PARENT > 历史默认；最终目录 = `{parent}_{分辨率}` |
+| `--data_root` | str | `""` | 原始 BraTS TrainingData 目录覆盖：命令行 > 环境变量 BRATS_DATA_ROOT > 历史默认 |
 
 ## 8. 目录结构与输出产物
 

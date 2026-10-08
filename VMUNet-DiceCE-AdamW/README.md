@@ -210,6 +210,11 @@ python VMUNet-DiceCE-AdamW/pipeline/train.py --epochs 2 --workers 0 --resolution
 | `--device` | str | None | 设备（cuda/cpu，None=自动检测） |
 | `--model_dir` | str | `""` | 自定义权重保存目录（默认 `pipeline/models/{分辨率}mm_{设备}`） |
 | `--log_name` | str | `""` | 自定义日志名称前缀（默认 `train_ultralight_{分辨率}mm`） |
+| `--seed` | int | `42` | 训练随机种子（--deterministic 时生效，不影响数据划分缓存） |
+| `--deterministic` | flag | False | 确定性训练：固定种子 + cudnn.deterministic + 确定性算法 + CUBLAS_WORKSPACE_CONFIG（不触碰 TF32，保持论文口径可比） |
+| `--cache_parent` | str | `""` | 缓存父目录覆盖：命令行 > 环境变量 SRTP_CACHE_PARENT > 历史默认；最终目录 = `{parent}_{分辨率}` |
+| `--skip_nonfinite` | flag | False | 跳过非有限 loss（NaN/Inf）的 batch：不 backward/不更新/不进平均权重，epoch 指标按有效 step 平均 |
+| `--best_weights` | str | `raw` | best_metric_model.pth 保存来源：raw=原始权重（历史口径）/ avg=验证所用的平均权重（SWA，需 --swa，否则回退 raw） |
 
 固定超参（写死在代码中，不可经 CLI 修改）：学习率 `1e-4`、权重衰减 `1e-5`、DiceCELoss、AdamW、CosineAnnealingLR（T_max=epochs）、混合精度（AMP autocast + GradScaler）、滑窗推理 `sw_batch_size=4, overlap=0.5, mode=gaussian`。
 
@@ -225,6 +230,10 @@ python VMUNet-DiceCE-AdamW/pipeline/train.py --epochs 2 --workers 0 --resolution
 | `--device` | str | None | 设备（cuda/cpu，None=自动检测） |
 | `--no_lesion_wise` | flag | False | 禁用 lesion-wise 指标 |
 | `--runs` | int | `1` | 评估次数（>1 时输出均值±标准差与浮动百分比） |
+| `--cache_parent` | str | `""` | 缓存父目录覆盖：命令行 > 环境变量 SRTP_CACHE_PARENT > 历史默认；最终目录 = `{parent}_{分辨率}` |
+| `--data_root` | str | `""` | 原始 BraTS TrainingData 目录覆盖：命令行 > 环境变量 BRATS_DATA_ROOT > 历史默认 |
+
+> 以上 `--deterministic` / `--cache_parent` / `--skip_nonfinite` / `--best_weights`（及 evaluate 的 `--cache_parent` / `--data_root`）为 2026-10-08 跨卡实验包合并引入的可选开关，默认关闭时不带任何新参数的命令行为与历史逐位一致；换机迁移用命令行参数或环境变量重定向，不改变各项目历史数据划分绑定。
 
 ## 8. 目录结构与输出产物
 
