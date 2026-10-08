@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>脑肿瘤分割可视化系统</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <!-- ORT 运行时（本地，移动端 WebView 兼容：numThreads=1 / simd 按需） -->
+    <script src="/vendor/ort/ort.min.js"></script>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
