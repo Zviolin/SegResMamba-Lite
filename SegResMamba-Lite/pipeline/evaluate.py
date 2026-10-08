@@ -18,6 +18,7 @@ sys.path.insert(0, _version_root)
 sys.path.insert(0, _code_root)
 
 from shared.data.dataloader import get_val_dataloader, get_data_list, auto_roi_size_from_cache
+from shared.utils.paths import resolve_cache_dir
 from shared.utils.checkpoint import load_checkpoint
 from shared.utils.device import setup_cuda_optimization
 from shared.utils.device_info import print_device_info
@@ -47,7 +48,12 @@ def evaluate(
     d_conv=2,
     expand=2,
     num_experts=4,                    # MoA 专家数量 (V6/V7 专用)
-    use_deep_supervision=True,
+    top_k=2,                          # MoA Top-K 激活专家数 (V10/V12)
+    expert_type='attention',          # V10 专家类型 (attention/mamba/dconv)
+    route_granularity='token',        # V10 路由粒度 (token/sample)
+    share_kv=True,                    # V10 是否共享 K/V 投影
+    decoder_moa=False,                # V10 G1：16³ 解码器侧追加 MoA
+    use_deep_supervision=False,       # 与训练默认保持一致（True 会多建 ds 头导致参数量打印偏大）
     # V6 专属（已废弃，保留兼容）
     use_boundary=True,
     use_mamba_in_moa=True,
@@ -77,17 +83,23 @@ def evaluate(
     OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "evaluation_results")
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    is_ema_model = False
+    # 平均权重文件名识别：旧权重为 best_metric_ema_model.pth（历史命名，实为等权 SWA），
+    # 新保存为 best_metric_swa_model.pth；两种命名均识别，旧权重 CSV 后缀保持 _ema 不变
+    model_suffix = ""
     if checkpoint_path:
-        is_ema_model = "ema" in os.path.basename(checkpoint_path).lower()
-
-    model_suffix = "_ema" if is_ema_model else ""
+        _base = os.path.basename(checkpoint_path).lower()
+        if "swa" in _base:
+            model_suffix = "_swa"
+        elif "ema" in _base:
+            model_suffix = "_ema"  # 旧权重文件名兼容（历史命名）
     logger = setup_logger(LOG_DIR, f"eval_{model_name}_{resolution}mm{model_suffix}")
 
     print_device_info(logger)
 
     if init_filters is None:
-        defaults = {'v1': 26, 'v2': 22, 'v3': 18, 'v4': 18, 'v6': 20, 'v7': 18, 'v8': 20}
+        # v1=24：论文 V1 权重（2.0mm_cuda，1,523,892 参数）实证 init=24；
+        # 2.0mm_cuda-v1 目录是 05-16 废弃的早期 init=26 训练，勿以其为准
+        defaults = {'v1': 24, 'v2': 22, 'v3': 18, 'v4': 18, 'v6': 20, 'v7': 18, 'v8': 20}
         init_filters = defaults.get(version, 20)
 
     logger.print_config_grouped({
@@ -99,6 +111,12 @@ def evaluate(
             "d_state": d_state,
             "expand": expand,
             "use_attention": use_attention,
+            "num_experts": num_experts,
+            "top_k": top_k,
+            "expert_type": expert_type if version in ('v10', 'v12') else "-",
+            "route_granularity": route_granularity if version in ('v10', 'v12') else "-",
+            "share_kv": share_kv if version in ('v10', 'v12') else "-",
+            "decoder_moa": decoder_moa if version in ('v10', 'v12') else "-",
             "device": DEVICE,
             "checkpoint": checkpoint_path if checkpoint_path else "未指定",
         },
@@ -112,23 +130,7 @@ def evaluate(
 
     all_data = get_data_list(DATA_DIR, mode="train")
 
-    case_ids = []
-    for d in all_data:
-        image_path = d["image"]
-        if isinstance(image_path, list):
-            image_path = image_path[0]
-        filename = os.path.basename(image_path)
-        parts = filename.split("-")
-        if len(parts) >= 4:
-            case_id = "-".join(parts[:4])
-        else:
-            case_id = filename
-        case_ids.append(case_id)
-
-    unique_case_ids = list(set(case_ids))
-    unique_case_ids.sort()
-
-    current_cache_dir = f"{CACHE_DIR}_{resolution}" if use_disk_cache else None
+    current_cache_dir = resolve_cache_dir(resolution, CACHE_DIR) if use_disk_cache else None
 
     if use_disk_cache and current_cache_dir:
         split_file = os.path.join(current_cache_dir, "split_info.json")
@@ -142,9 +144,7 @@ def evaluate(
         test_files = [d for d in all_data if d["id"] in test_case_ids]
         test_cache_dir = os.path.join(current_cache_dir, "test")
     else:
-        test_case_ids = unique_case_ids[int(len(unique_case_ids) * 0.85):]
-        test_files = [d for d, cid in zip(all_data, case_ids) if cid in test_case_ids]
-        test_cache_dir = current_cache_dir
+        raise ValueError("必须启用缓存 (--cache) 并确保已生成缓存")
 
     print(f"测试样本数: {len(test_files)}")
     pixdim = (resolution, resolution, resolution)
@@ -159,10 +159,10 @@ def evaluate(
     )
 
     # ─────────────────────────────────────────────────────────────────────
-    # 模型创建（按 version 分发）
+    # 模型创建（按 version 分发；消融参数必须与训练一致）
     # ─────────────────────────────────────────────────────────────────────
-    model = get_model(
-        version=version,
+    # 基础参数（v6/v7/v9/v11 签名完全匹配；v3/v4 经 **kwargs 透传给模型类）
+    base_kwargs = dict(
         in_channels=4,
         out_channels=4,
         init_filters=init_filters,
@@ -174,6 +174,32 @@ def evaluate(
         num_experts=num_experts,
         device=DEVICE,
     )
+    model_kwargs = dict(base_kwargs)
+    if version == 'v1':
+        # V1 签名仅含 in/out/init_filters/use_attention/use_deep_supervision/device（无 Mamba/MoE 参数）
+        model_kwargs = {
+            "in_channels": 4,
+            "out_channels": 4,
+            "init_filters": init_filters,
+            "use_attention": use_attention,
+            "use_deep_supervision": use_deep_supervision,
+            "device": DEVICE,
+        }
+    elif version == 'v2':
+        # V2 签名不含 num_experts，剔除后其余透传
+        model_kwargs = {k: v for k, v in base_kwargs.items() if k != "num_experts"}
+    # V10/V12 消融参数（其余版本的 get_model 不接受这些参数，不透传）
+    if version in ('v10', 'v12'):
+        model_kwargs.update(
+            top_k=top_k,
+            expert_type=expert_type,
+            route_granularity=route_granularity,
+            share_kv=share_kv,
+            decoder_moa=decoder_moa,
+        )
+    # version 供 get_model 分发（其内部 pop，不透传给各版本工厂）；缺失时会错误落到默认 v4
+    model_kwargs["version"] = version
+    model = get_model(**model_kwargs)
 
     if checkpoint_path:
         print(f"加载检查点: {checkpoint_path}")
@@ -199,7 +225,9 @@ def evaluate(
         logger.print_info("MoA 注意力权重统计")
         logger.print_info("=" * 70)
         model.eval()
-        x = torch.randn(1, 4, 64, 64, 64, device=DEVICE)
+        # 固定诊断输入种子：可视化统计与评估指标无关，但同 seed 下诊断输出可复现
+        x = torch.randn(1, 4, 64, 64, 64, device=DEVICE,
+                        generator=torch.Generator(device=DEVICE).manual_seed(0))
         with torch.no_grad():
             weights = model.get_moa_attention_weights(x)
         weights_np = weights.cpu().numpy()[0]
@@ -220,7 +248,7 @@ def evaluate(
         weight_decay=1e-5,
         scheduler_type="CosineAnnealingLR",
         max_epochs=1,
-        use_ema=False,
+        use_swa=False,
         use_deep_supervision=False,
     )
 
@@ -245,12 +273,22 @@ def evaluate(
             print(f"\n运行 {run_idx + 1}/{runs}:")
             print("-" * 40)
 
+        # runs>1 时逐轮使用独立 CSV，避免多次运行结果混写同一文件被重复平均
+        if lesion_wise:
+            if runs == 1:
+                lw_file = lesion_results_file
+            else:
+                _lw_base, _lw_ext = os.path.splitext(str(lesion_results_file))
+                lw_file = f"{_lw_base}_run{run_idx + 1}{_lw_ext}"
+        else:
+            lw_file = None
+
         metrics = trainer.validate_verbose(
             val_loader,
             spacing=spacing,
             roi_size=roi_size,
             results_file=results_file if runs == 1 else None,
-            lesion_results_file=lesion_results_file if (runs == 1 and lesion_wise) else (lesion_results_file if lesion_wise else None),
+            lesion_results_file=lw_file,
         )
         all_metrics.append(metrics)
 
@@ -312,7 +350,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="SegResMamba 评估")
     parser.add_argument("--model", type=str, default="segresmamba_lite", help="模型名称")
     parser.add_argument("--version", type=str, default="v2",
-                        choices=["v1", "v2", "v3", "v4", "v6", "v7", "v8", "v9", "v10", "v11"],
+                        choices=["v1", "v2", "v3", "v4", "v6", "v7", "v8", "v9", "v10", "v11", "v12"],
                         help="模型版本")
     parser.add_argument("--resolution", type=float, default=2.0, help="分辨率")
     parser.add_argument("--checkpoint", type=str, default=None, help="检查点路径")
@@ -320,9 +358,23 @@ if __name__ == "__main__":
     parser.add_argument("--d_state", type=int, default=8, help="Mamba 状态维度")
     parser.add_argument("--expand", type=int, default=2, help="Mamba 扩展因子")
     parser.add_argument("--no_attention", action="store_true", help="禁用注意力机制")
-    parser.add_argument("--deep_supervision", action="store_true", default=True, help="启用深层监督")
+    parser.add_argument("--num_experts", type=int, default=4, help="MoA 专家数量")
+    parser.add_argument("--top_k", type=int, default=2, help="MoA Top-K 激活专家数 (V10/V12)")
+    parser.add_argument("--expert_type", type=str, default="attention",
+                        choices=["attention", "mamba", "dconv"], help="V10 专家类型")
+    parser.add_argument("--route_granularity", type=str, default="token",
+                        choices=["token", "sample"], help="V10 路由粒度")
+    parser.add_argument("--share_kv", type=int, default=1, choices=[0, 1],
+                        help="V10 是否共享 K/V（1=共享，0=每专家独立）")
+    parser.add_argument("--decoder_moa", type=int, default=0, choices=[0, 1],
+                        help="V10 G1：16³ 解码器侧追加 MoA（1=启用）")
+    parser.add_argument("--deep_supervision", action="store_true", default=False, help="启用深层监督（默认关闭，与训练默认一致，避免参数量打印偏大）")
     parser.add_argument("--no_deep_supervision", action="store_false", dest="deep_supervision", help="禁用深层监督")
     parser.add_argument("--workers", type=str, default="auto", help="数据加载线程数")
+    parser.add_argument("--run_tag", type=str, default="",
+                        help="消融实验标签：默认 checkpoint 路径追加 _{tag}（与训练 --run_tag 对应）")
+    parser.add_argument("--model_dir", type=str, default="",
+                        help="自定义权重目录（优先级高于 --run_tag）：默认 checkpoint 取 {model_dir}/best_metric_model.pth")
     parser.add_argument("--cache", action="store_true", help="启用硬盘缓存")
     parser.add_argument("--device", type=str, default=None, help="设备 (cuda/cpu)")
     parser.add_argument("--no_lesion_wise", action="store_true", help="禁用 lesion-wise 指标")
@@ -330,7 +382,13 @@ if __name__ == "__main__":
     parser.add_argument("--visualize_attention", action="store_true", help="V6: 可视化 MoA 注意力权重")
     args = parser.parse_args()
 
-    _default_ckpt = os.path.join(_version_root, "pipeline", "models", f"2.0mm_{args.version}_cuda", "best_metric_model.pth")
+    # 默认 checkpoint：--model_dir 优先，其次 models/2.0mm_{version}_cuda[_{run_tag}]
+    if args.model_dir:
+        _default_ckpt = os.path.join(os.path.abspath(args.model_dir), "best_metric_model.pth")
+    else:
+        _tag_suffix = f"_{args.run_tag}" if args.run_tag else ""
+        _default_ckpt = os.path.join(_version_root, "pipeline", "models",
+                                     f"2.0mm_{args.version}_cuda{_tag_suffix}", "best_metric_model.pth")
     if args.checkpoint is None:
         args.checkpoint = _default_ckpt
 
@@ -353,6 +411,12 @@ if __name__ == "__main__":
         d_state=args.d_state,
         expand=args.expand,
         use_deep_supervision=args.deep_supervision,
+        num_experts=args.num_experts,
+        top_k=args.top_k,
+        expert_type=args.expert_type,
+        route_granularity=args.route_granularity,
+        share_kv=bool(args.share_kv),
+        decoder_moa=bool(args.decoder_moa),
         num_workers=num_workers,
         use_disk_cache=args.cache,
         lesion_wise=not args.no_lesion_wise,

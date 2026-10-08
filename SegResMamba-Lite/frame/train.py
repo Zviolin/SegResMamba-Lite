@@ -1,7 +1,9 @@
 """
 【Optimized 训练框架】
 框架：预测+Loss+反向+更新
-支持深层监督和 EMA（基于 PyTorch AveragedModel）
+支持深层监督和权重滑动平均（SWA 等权，基于 PyTorch AveragedModel；
+历史命名"EMA"实为等权 SWA，2026-10-05 命名修正，EMA 一词现仅指
+真指数移动平均，见 --weight_mode ema）
 """
 
 import os
@@ -17,9 +19,47 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from shared.losses import get_loss
 from shared.optim import get_optimizer, get_scheduler
+from shared.optim.swa import SWA
 from shared.optim.ema import EMA
 from shared.inference.sliding_window import sliding_window_inference
 from shared.inference.postprocess import brats_label_mapping
+
+# 空边界 HD95 满额惩罚距离（mm），与 lesion-wise 口径保持一致
+HD95_EMPTY_PENALTY = 374.0
+
+
+def _is_empty_volume(x):
+    """判断张量或张量列表是否全为 0（空体积）"""
+    if isinstance(x, (list, tuple)):
+        return all(_is_empty_volume(t) for t in x)
+    return not bool(torch.any(x > 0))
+
+
+def _safe_hd95(metric, pred, gt):
+    """单病例 HD95 计算（空边界安全版）
+
+    - 空-空（无病灶且未误检）：记 0（完美预测）
+    - 一空一非空（整区漏检或假阳性）：记 374 满额惩罚（与 lesion-wise 口径一致）
+    - 其余正常情形走 MONAI 计算，inf/nan 兜底为 374
+    避免 inf/nan 进入均值聚合造成指标失真（旧版对 inf 记 0 会美化最差预测）
+
+    注意：MONAI 调用不传 spacing——全局 HD95 的输入张量为 (1,D,H,W) 4 维
+    （MONAI 按 2D 解释），历史全部全局 HD95 数字均为该口径（voxel 单位）；
+    传 spacing 会因维度不匹配报错，且会改变与历史数字的可比性。
+    """
+    pred_empty = _is_empty_volume(pred)
+    gt_empty = _is_empty_volume(gt)
+    if pred_empty and gt_empty:
+        return 0.0
+    if pred_empty or gt_empty:
+        return HD95_EMPTY_PENALTY
+    metric.reset()
+    metric(y_pred=pred, y=gt)
+    val = metric.aggregate().item()
+    metric.reset()
+    if np.isnan(val) or np.isinf(val):
+        return HD95_EMPTY_PENALTY
+    return val
 
 
 class OptimizedTrainer:
@@ -35,8 +75,9 @@ class OptimizedTrainer:
         weight_decay=1e-5,
         scheduler_type="CosineAnnealingLR",
         max_epochs=150,
-        use_ema=True,
-        ema_decay=0.999,
+        use_swa=True,
+        weight_mode="swa",  # 权重平均模式：swa=等权平均（历史口径）/ ema=真指数移动平均（V7/V8 与 EMA1 对照消融复现）
+        ema_decay=0.999,    # 仅 weight_mode="ema" 时生效（等权 SWA 无衰减概念）
         use_deep_supervision=False,
         non_blocking=True,
         version=None,
@@ -44,7 +85,7 @@ class OptimizedTrainer:
     ):
         self.device = device
         self.max_epochs = max_epochs
-        self.use_ema = use_ema
+        self.use_swa = use_swa
         self.use_deep_supervision = use_deep_supervision
         self.non_blocking = non_blocking if device == "cuda" else False
         self.version = version
@@ -87,15 +128,23 @@ class OptimizedTrainer:
         )
         self.scaler = torch.amp.GradScaler('cuda', enabled=(device == "cuda"))
 
-        if use_ema:
-            # 自动检测需要排除 EMA 的参数（alpha_raw、temperature）
+        if use_swa:
+            # 自动检测需要排除权重平均的参数（alpha_raw、temperature）
             exclude_param_names = []
             for name, _ in model.named_parameters():
                 if 'alpha_raw' in name or 'temperature' in name:
                     exclude_param_names.append(name)
-            self.ema = EMA(model, decay=ema_decay, exclude_param_names=exclude_param_names)
+            if weight_mode == "ema":
+                # 真指数移动平均（V7/V8 历史语义 / EMA1 对照消融复现）
+                self.weight_avg = EMA(model, decay=ema_decay, exclude_param_names=exclude_param_names)
+                print(f"权重平均模式: 真指数 EMA（decay={ema_decay} 生效，"
+                      f"{'排除 ' + str(len(exclude_param_names)) + ' 个特殊参数' if exclude_param_names else '无排除参数'}）")
+            else:
+                # SWA 等权平均（历史口径，V10 及全部消融/其余版本的实际行为）
+                self.weight_avg = SWA(model, exclude_param_names=exclude_param_names)
+                print(f"权重平均模式: SWA 等权平均（历史口径，decay 不生效）")
         else:
-            self.ema = None
+            self.weight_avg = None
 
     def compute_loss(self, outputs, labels):
         """计算损失，支持深层监督"""
@@ -126,8 +175,8 @@ class OptimizedTrainer:
         with torch.amp.autocast('cuda', enabled=(self.device == "cuda")):
             outputs = self.model(inputs)
             loss = self.compute_loss(outputs, labels)
-            # V9/V10/V11 稀疏路由：接入负载均衡损失（防止路由坍缩/专家饿死）
-            if self.version in ('v9', 'v10', 'v11') and self.lb_weight > 0 and hasattr(self.model, 'get_moe_load_balance_loss'):
+            # V9/V10/V11/V12 稀疏路由：接入负载均衡损失（防止路由坍缩/专家饿死）
+            if self.version in ('v9', 'v10', 'v11', 'v12') and self.lb_weight > 0 and hasattr(self.model, 'get_moe_load_balance_loss'):
                 lb_loss = self.model.get_moe_load_balance_loss()
                 loss = loss + self.lb_weight * lb_loss
 
@@ -135,8 +184,8 @@ class OptimizedTrainer:
         self.scaler.step(self.optimizer)
         self.scaler.update()
 
-        if self.ema:
-            self.ema.update()
+        if self.weight_avg:
+            self.weight_avg.update()
 
         return loss.item()
 
@@ -158,9 +207,9 @@ class OptimizedTrainer:
         return epoch_loss / step
 
     def _get_eval_model(self):
-        """获取验证用的模型（原始模型或 EMA 模型）"""
-        if self.ema is not None:
-            return self.ema.ema_model
+        """获取验证用的模型（原始模型或平均权重模型）"""
+        if self.weight_avg is not None:
+            return self.weight_avg.averaged_model
         return self.model
 
     @torch.no_grad()
@@ -176,6 +225,7 @@ class OptimizedTrainer:
         hd95_metric_wt = HausdorffDistanceMetric(include_background=False, percentile=95, reduction="mean")
         hd95_metric_tc = HausdorffDistanceMetric(include_background=False, percentile=95, reduction="mean")
         hd95_metric_et = HausdorffDistanceMetric(include_background=False, percentile=95, reduction="mean")
+        hd95_vals_wt, hd95_vals_tc, hd95_vals_et = [], [], []
 
         for val_data in tqdm(val_loader, desc="Validating"):
             val_inputs = val_data["image"].to(self.device, non_blocking=nb)
@@ -202,23 +252,24 @@ class OptimizedTrainer:
             dice_metric_wt(y_pred=pred_wt, y=true_wt)
             dice_metric_tc(y_pred=pred_tc, y=true_tc)
             dice_metric_et(y_pred=pred_et, y=true_et)
-            hd95_metric_wt(y_pred=pred_wt, y=true_wt, spacing=spacing)
-            hd95_metric_tc(y_pred=pred_tc, y=true_tc, spacing=spacing)
-            hd95_metric_et(y_pred=pred_et, y=true_et, spacing=spacing)
+            # 逐病例安全计算 HD95：空-空=0、一空一非空=374 惩罚，防 inf 污染聚合均值
+            for pw_v, tw_v in zip(pred_wt, true_wt):
+                hd95_vals_wt.append(_safe_hd95(hd95_metric_wt, pw_v, tw_v))
+            for pc_v, tc_v in zip(pred_tc, true_tc):
+                hd95_vals_tc.append(_safe_hd95(hd95_metric_tc, pc_v, tc_v))
+            for pe_v, te_v in zip(pred_et, true_et):
+                hd95_vals_et.append(_safe_hd95(hd95_metric_et, pe_v, te_v))
 
         metric_wt = dice_metric_wt.aggregate().item()
         metric_tc = dice_metric_tc.aggregate().item()
         metric_et = dice_metric_et.aggregate().item()
-        hd95_wt = hd95_metric_wt.aggregate().item()
-        hd95_tc = hd95_metric_tc.aggregate().item()
-        hd95_et = hd95_metric_et.aggregate().item()
+        hd95_wt = float(np.mean(hd95_vals_wt)) if hd95_vals_wt else 0.0
+        hd95_tc = float(np.mean(hd95_vals_tc)) if hd95_vals_tc else 0.0
+        hd95_et = float(np.mean(hd95_vals_et)) if hd95_vals_et else 0.0
 
         dice_metric_wt.reset()
         dice_metric_tc.reset()
         dice_metric_et.reset()
-        hd95_metric_wt.reset()
-        hd95_metric_tc.reset()
-        hd95_metric_et.reset()
 
         result = {
             "dice_wt": metric_wt,
@@ -259,6 +310,7 @@ class OptimizedTrainer:
         hd95_metric_wt = HausdorffDistanceMetric(include_background=False, percentile=95, reduction="mean")
         hd95_metric_tc = HausdorffDistanceMetric(include_background=False, percentile=95, reduction="mean")
         hd95_metric_et = HausdorffDistanceMetric(include_background=False, percentile=95, reduction="mean")
+        hd95_vals_wt, hd95_vals_tc, hd95_vals_et = [], [], []
 
         for val_data in tqdm(val_loader, desc="Validating"):
             val_inputs = val_data["image"].to(self.device, non_blocking=nb)
@@ -286,9 +338,13 @@ class OptimizedTrainer:
             dice_metric_wt(y_pred=pred_wt, y=true_wt)
             dice_metric_tc(y_pred=pred_tc, y=true_tc)
             dice_metric_et(y_pred=pred_et, y=true_et)
-            hd95_metric_wt(y_pred=pred_wt, y=true_wt, spacing=spacing)
-            hd95_metric_tc(y_pred=pred_tc, y=true_tc, spacing=spacing)
-            hd95_metric_et(y_pred=pred_et, y=true_et, spacing=spacing)
+            # 逐病例安全计算 HD95：空-空=0、一空一非空=374 惩罚，防 inf 污染聚合均值
+            for pw_v, tw_v in zip(pred_wt, true_wt):
+                hd95_vals_wt.append(_safe_hd95(hd95_metric_wt, pw_v, tw_v))
+            for pc_v, tc_v in zip(pred_tc, true_tc):
+                hd95_vals_tc.append(_safe_hd95(hd95_metric_tc, pc_v, tc_v))
+            for pe_v, te_v in zip(pred_et, true_et):
+                hd95_vals_et.append(_safe_hd95(hd95_metric_et, pe_v, te_v))
 
             if results_file is not None:
                 temp_dice = DiceMetric(include_background=False, reduction="mean")
@@ -304,22 +360,13 @@ class OptimizedTrainer:
                 d_et = temp_dice.aggregate().item()
                 temp_dice.reset()
 
-                temp_hd95(y_pred=pred_wt, y=true_wt, spacing=spacing)
-                h_wt = temp_hd95.aggregate().item()
-                temp_hd95.reset()
-                temp_hd95(y_pred=pred_tc, y=true_tc, spacing=spacing)
-                h_tc = temp_hd95.aggregate().item()
-                temp_hd95.reset()
-                temp_hd95(y_pred=pred_et, y=true_et, spacing=spacing)
-                h_et = temp_hd95.aggregate().item()
-                temp_hd95.reset()
+                h_wt = _safe_hd95(temp_hd95, pred_wt, true_wt)
+                h_tc = _safe_hd95(temp_hd95, pred_tc, true_tc)
+                h_et = _safe_hd95(temp_hd95, pred_et, true_et)
 
                 d_wt = 1.0 if np.isnan(d_wt) or np.isinf(d_wt) else d_wt
                 d_tc = 1.0 if np.isnan(d_tc) or np.isinf(d_tc) else d_tc
                 d_et = 1.0 if np.isnan(d_et) or np.isinf(d_et) else d_et
-                h_wt = 0.0 if np.isnan(h_wt) or np.isinf(h_wt) else h_wt
-                h_tc = 0.0 if np.isnan(h_tc) or np.isinf(h_tc) else h_tc
-                h_et = 0.0 if np.isnan(h_et) or np.isinf(h_et) else h_et
 
                 with open(results_file, "a") as f:
                     f.write(f"{case_id},{d_wt:.4f},{d_tc:.4f},{d_et:.4f},{h_wt:.4f},{h_tc:.4f},{h_et:.4f}\n")
@@ -380,16 +427,13 @@ class OptimizedTrainer:
         metric_wt = dice_metric_wt.aggregate().item()
         metric_tc = dice_metric_tc.aggregate().item()
         metric_et = dice_metric_et.aggregate().item()
-        hd95_wt = hd95_metric_wt.aggregate().item()
-        hd95_tc = hd95_metric_tc.aggregate().item()
-        hd95_et = hd95_metric_et.aggregate().item()
+        hd95_wt = float(np.mean(hd95_vals_wt)) if hd95_vals_wt else 0.0
+        hd95_tc = float(np.mean(hd95_vals_tc)) if hd95_vals_tc else 0.0
+        hd95_et = float(np.mean(hd95_vals_et)) if hd95_vals_et else 0.0
 
         dice_metric_wt.reset()
         dice_metric_tc.reset()
         dice_metric_et.reset()
-        hd95_metric_wt.reset()
-        hd95_metric_tc.reset()
-        hd95_metric_et.reset()
 
         result = {
             "dice_wt": metric_wt,

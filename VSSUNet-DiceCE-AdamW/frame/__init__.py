@@ -3,6 +3,6 @@
 训练框架：预测+Loss+反向+更新
 """
 
-from .train import MambaUNetTrainer
+from .train import VSSUNetTrainer
 
-__all__ = ["MambaUNetTrainer"]
+__all__ = ["VSSUNetTrainer"]

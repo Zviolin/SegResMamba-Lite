@@ -11,7 +11,7 @@
 - scheduler: 学习率调度器
 - epoch: 当前训练轮数
 - metric: 当前指标值
-- ema_model: EMA模型
+- swa_model: SWA 平均权重模型（历史命名 ema_model，实为等权 SWA，已改名）
 - checkpoint_path: 检查点文件路径
 - device: 设备类型
 """
@@ -38,7 +38,7 @@ class ModelCheckpoint:
         self.mode = mode
         self.best_value = -1 if mode == "max" else float("inf")
 
-    def save(self, model, optimizer=None, scheduler=None, epoch=None, metric=None, ema_model=None):
+    def save(self, model, optimizer=None, scheduler=None, epoch=None, metric=None, swa_model=None):
         """
         保存检查点
 
@@ -48,7 +48,7 @@ class ModelCheckpoint:
             scheduler: 学习率调度器 (可选)
             epoch: 当前 epoch (可选)
             metric: 当前指标值 (可选，用于判断是否保存最佳模型)
-            ema_model: EMA 模型 (可选)
+            swa_model: SWA 平均权重模型 (可选；历史参数名 ema_model 实为等权 SWA，已改名)
         """
         os.makedirs(self.save_dir, exist_ok=True)
         is_best = False
@@ -78,8 +78,10 @@ class ModelCheckpoint:
 
         if is_best:
             torch.save(model.state_dict(), os.path.join(self.save_dir, f"best_metric_model_{self.prefix}.pth"))
-            if ema_model is not None:
-                torch.save(ema_model.state_dict(), os.path.join(self.save_dir, f"best_metric_ema_model_{self.prefix}.pth"))
+            if swa_model is not None:
+                # 平均权重文件名：历史为 best_metric_ema_model_{prefix}.pth（历史命名实为 SWA），
+                # 新保存统一用 best_metric_swa_model_{prefix}.pth，评估端对两种命名均兼容
+                torch.save(swa_model.state_dict(), os.path.join(self.save_dir, f"best_metric_swa_model_{self.prefix}.pth"))
             print(f"已保存新的最佳模型！指标: {metric:.4f}")
 
     def save_latest(self, model, optimizer=None, scheduler=None, epoch=None, metric=None):
@@ -108,6 +110,23 @@ class ModelCheckpoint:
         torch.save(checkpoint, os.path.join(self.save_dir, f"latest_checkpoint_{self.prefix}.pth"))
 
 
+def _warn_on_mismatch(result, strict):
+    """strict=False 加载时打印 missing/unexpected 键摘要，避免静默部分加载
+
+    静默的部分加载是评估链最危险的失败模式（如消融参数漏传时，
+    结构多出的随机初始化权重会被无声使用）。此护栏让任何不匹配显式可见。
+    """
+    if strict or result is None:
+        return
+    n_missing, n_unexpected = len(result.missing_keys), len(result.unexpected_keys)
+    if n_missing or n_unexpected:
+        print(f"[checkpoint 警告] state_dict 不完全匹配: missing={n_missing}, unexpected={n_unexpected}")
+        if n_missing:
+            print(f"  missing 示例: {list(result.missing_keys)[:5]}")
+        if n_unexpected:
+            print(f"  unexpected 示例: {list(result.unexpected_keys)[:5]}")
+
+
 def load_checkpoint(model, checkpoint_path, device="cuda", strict=True):
     """
     加载检查点
@@ -125,7 +144,7 @@ def load_checkpoint(model, checkpoint_path, device="cuda", strict=True):
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
 
     if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
-        model.load_state_dict(checkpoint["model_state_dict"], strict=strict)
+        _warn_on_mismatch(model.load_state_dict(checkpoint["model_state_dict"], strict=strict), strict)
     elif isinstance(checkpoint, dict) and "state_dict" in checkpoint:
         # EMA 模型格式
         state_dict = checkpoint["state_dict"]
@@ -138,7 +157,7 @@ def load_checkpoint(model, checkpoint_path, device="cuda", strict=True):
         for k, v in state_dict.items():
             name = k[7:] if k.startswith("module.") else k
             new_state_dict[name] = v
-        model.load_state_dict(new_state_dict, strict=strict)
+        _warn_on_mismatch(model.load_state_dict(new_state_dict, strict=strict), strict)
     else:
         # 直接是 state_dict 的情况
         if isinstance(checkpoint, dict):
@@ -151,8 +170,8 @@ def load_checkpoint(model, checkpoint_path, device="cuda", strict=True):
             for k, v in state_dict.items():
                 name = k[7:] if k.startswith("module.") else k
                 new_state_dict[name] = v
-            model.load_state_dict(new_state_dict, strict=strict)
+            _warn_on_mismatch(model.load_state_dict(new_state_dict, strict=strict), strict)
         else:
-            model.load_state_dict(checkpoint, strict=strict)
+            _warn_on_mismatch(model.load_state_dict(checkpoint, strict=strict), strict)
 
     return model, checkpoint

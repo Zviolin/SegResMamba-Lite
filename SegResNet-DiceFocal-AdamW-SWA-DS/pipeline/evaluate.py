@@ -16,6 +16,7 @@ sys.path.insert(0, _version_root)
 sys.path.insert(0, _code_root)
 
 from shared.data.dataloader import get_val_dataloader, get_data_list, auto_roi_size_from_cache
+from shared.utils.paths import resolve_cache_dir
 from shared.utils.checkpoint import load_checkpoint
 from shared.utils.device import setup_cuda_optimization
 from shared.utils.device_info import print_device_info
@@ -81,13 +82,16 @@ def evaluate(
     OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "evaluation_results")
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    # 判断是否是 EMA 模型
-    is_ema_model = False
+    # 平均权重文件名识别：旧权重 best_metric_ema_model.pth（历史命名，实为等权 SWA）→ _ema 后缀；
+    # 新权重 best_metric_swa_model.pth → _swa 后缀；两种命名均兼容，论文口径 CSV（*_ema.csv）名不变
+    model_suffix = ""
     if checkpoint_path:
-        is_ema_model = "ema" in os.path.basename(checkpoint_path).lower()
-    
-    # 根据模型类型生成不同的日志和结果文件名
-    model_suffix = "_ema" if is_ema_model else ""
+        _base = os.path.basename(checkpoint_path).lower()
+        if "swa" in _base:
+            model_suffix = "_swa"
+        elif "ema" in _base:
+            model_suffix = "_ema"  # 旧权重文件名兼容（历史命名）
+
     logger = setup_logger(LOG_DIR, f"eval_{model_name}_{resolution}mm{model_suffix}")
 
     # ─────────────────────────────────────────────────────────────────────
@@ -113,23 +117,7 @@ def evaluate(
 
     all_data = get_data_list(DATA_DIR, mode="train")
 
-    case_ids = []
-    for d in all_data:
-        image_path = d["image"]
-        if isinstance(image_path, list):
-            image_path = image_path[0]
-        filename = os.path.basename(image_path)
-        parts = filename.split("-")
-        if len(parts) >= 4:
-            case_id = "-".join(parts[:4])
-        else:
-            case_id = filename
-        case_ids.append(case_id)
-
-    unique_case_ids = list(set(case_ids))
-    unique_case_ids.sort()
-
-    current_cache_dir = f"{CACHE_DIR}_{resolution}" if use_disk_cache else None
+    current_cache_dir = resolve_cache_dir(resolution, CACHE_DIR) if use_disk_cache else None
 
     if use_disk_cache and current_cache_dir:
         split_file = os.path.join(current_cache_dir, "split_info.json")
@@ -143,9 +131,7 @@ def evaluate(
         test_files = [d for d in all_data if d["id"] in test_case_ids]
         test_cache_dir = os.path.join(current_cache_dir, "test")
     else:
-        test_case_ids = unique_case_ids[int(len(unique_case_ids) * 0.85):]
-        test_files = [d for d, cid in zip(all_data, case_ids) if cid in test_case_ids]
-        test_cache_dir = current_cache_dir
+        raise ValueError("必须启用缓存 (--cache) 并确保已生成缓存")
 
     print(f"测试样本数: {len(test_files)}")
     pixdim = (resolution, resolution, resolution)
@@ -186,7 +172,7 @@ def evaluate(
         weight_decay=1e-5,
         scheduler_type="CosineAnnealingLR",
         max_epochs=1,
-        use_ema=False,
+        use_swa=False,
         use_deep_supervision=False,
     )
 
@@ -217,7 +203,7 @@ def evaluate(
             spacing=spacing,
             roi_size=roi_size,
             results_file=results_file if runs == 1 else None,
-            lesion_results_file=lesion_results_file if (runs == 1 and lesion_wise) else (lesion_results_file if lesion_wise else None),
+            lesion_results_file=lesion_results_file if (runs == 1 and lesion_wise) else None,
         )
         all_metrics.append(metrics)
 
@@ -277,7 +263,7 @@ def evaluate(
 if __name__ == "__main__":
     import argparse
     _version_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    _default_ckpt = os.path.join(_version_root, "pipeline", "models", "3.0mm", "best_metric_model.pth")
+    _default_ckpt = os.path.join(_version_root, "pipeline", "models", "2.0mm_cuda", "best_metric_model.pth")
     parser = argparse.ArgumentParser(description="Optimized 评估")
     parser.add_argument("--model", type=str, default="segresnet", help="模型名称")
     parser.add_argument("--resolution", type=float, default=1.0, help="分辨率")

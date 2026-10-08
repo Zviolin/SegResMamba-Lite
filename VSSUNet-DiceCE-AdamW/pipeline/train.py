@@ -19,6 +19,7 @@ from shared.data.dataloader import get_train_dataloader, get_val_dataloader, aut
 from shared.utils.logger import setup_logger
 from shared.utils.device import setup_cuda_optimization
 from shared.utils.device_info import print_device_info
+from shared.utils.paths import resolve_log_prefix, resolve_model_dir, resolve_cache_dir
 
 from models import get_model
 from frame.train import VSSUNetTrainer
@@ -37,13 +38,15 @@ def train(
     num_workers=None,              # 数据加载线程数，None 表示自动计算
     batch_size=None,            # 批次大小，None 表示自动计算
     use_disk_cache=False,        # 是否使用数据缓存
-    use_ema=False,              # 是否启用 EMA 指数移动平均
+    use_swa=False,              # 是否启用权重滑动平均（SWA 等权）
     max_epochs=100,              # 训练轮数
     val_interval=5,             # 验证间隔 (每N个epoch验证一次)
     # ═══════════════════════════════════════════════════════════════════════
     # 设备参数
     # ═══════════════════════════════════════════════════════════════════════
     device=None,                 # 设备类型 (cuda/cpu)
+    model_dir="",                # 自定义权重保存目录（空=默认 pipeline/models/{分辨率}mm_{设备}）
+    log_name="",                 # 自定义日志名称前缀（空=默认 train_{版本}_{分辨率}mm）
 ):
     """
     训练入口
@@ -55,7 +58,7 @@ def train(
         num_workers: 数据加载线程数
         batch_size: 批次大小
         use_disk_cache: 是否使用数据缓存
-        use_ema: 是否启用 EMA
+        use_swa: 是否启用权重滑动平均（SWA）
         max_epochs: 训练轮数
         val_interval: 验证间隔
         device: 设备类型 (cuda/cpu)
@@ -64,7 +67,7 @@ def train(
     # 日志配置
     # ─────────────────────────────────────────────────────────────────────
     LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
-    logger = setup_logger(LOG_DIR, f"train_{version_name}_{resolution}mm")
+    logger = setup_logger(LOG_DIR, resolve_log_prefix(log_name, f"train_{version_name}_{resolution}mm"))
 
     # ─────────────────────────────────────────────────────────────────────
     # 设备信息
@@ -100,7 +103,7 @@ def train(
             "batch_size": BATCH_SIZE,
             "num_workers": num_workers,
             "max_epochs": max_epochs,
-            "use_ema": use_ema,
+            "use_swa": use_swa,
             "use_disk_cache": use_disk_cache,
             "val_interval": val_interval,
         },
@@ -113,7 +116,7 @@ def train(
         },
     }, title="训练配置")
 
-    current_cache_dir = f"{CACHE_DIR}_{resolution}" if use_disk_cache else None
+    current_cache_dir = resolve_cache_dir(resolution, CACHE_DIR) if use_disk_cache else None
     pixdim = (resolution, resolution, resolution)
 
     if use_disk_cache and current_cache_dir:
@@ -175,10 +178,14 @@ def train(
         weight_decay=1e-5,
         scheduler_type="CosineAnnealingLR",
         max_epochs=max_epochs,
-        use_ema=use_ema,
+        use_swa=use_swa,
     )
 
-    MODEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", f"{resolution}mm_{DEVICE.replace(':', '')}")
+    MODEL_DIR = resolve_model_dir(
+        model_dir,
+        os.path.dirname(os.path.abspath(__file__)),
+        f"{resolution}mm_{DEVICE.replace(':', '')}",
+    )
     os.makedirs(MODEL_DIR, exist_ok=True)
 
     best_metric = -1
@@ -290,12 +297,16 @@ if __name__ == "__main__":
     parser.add_argument("--model", type=str, default="vss_unet", help="模型名称")
     parser.add_argument("--resolution", type=float, default=1.0, help="分辨率")
     parser.add_argument("--workers", type=str, default="auto", help="数据加载线程数 (auto/数字，auto表示自动计算)")
-    parser.add_argument("--batch", type=int, default=4, help="批次大小")
+    parser.add_argument("--batch", type=str, default="4", help="批次大小 (auto/数字，auto表示自动计算)")
     parser.add_argument("--cache", action="store_true", help="启用硬盘缓存")
-    parser.add_argument("--ema", action="store_true", help="启用 EMA")
+    parser.add_argument("--swa", action="store_true", help="启用权重滑动平均（SWA 等权）")
     parser.add_argument("--epochs", type=int, default=100, help="训练轮数")
     parser.add_argument("--val_interval", type=int, default=5, help="验证间隔")
     parser.add_argument("--device", type=str, default=None, help="设备 (cuda/cpu)")
+    parser.add_argument("--model_dir", type=str, default="",
+                        help="自定义权重保存目录（优先级高于默认规则；默认 pipeline/models/{分辨率}mm_{设备}）")
+    parser.add_argument("--log_name", type=str, default="",
+                        help="自定义日志名称前缀（默认 train_{版本}_{分辨率}mm）")
     args = parser.parse_args()
     
     # 解析 num_workers 参数
@@ -325,8 +336,10 @@ if __name__ == "__main__":
         num_workers=workers_arg,
         batch_size=batch_arg,
         use_disk_cache=args.cache,
-        use_ema=args.ema,
+        use_swa=args.swa,
         max_epochs=args.epochs,
         val_interval=args.val_interval,
         device=args.device,
+        model_dir=args.model_dir,
+        log_name=args.log_name,
     )

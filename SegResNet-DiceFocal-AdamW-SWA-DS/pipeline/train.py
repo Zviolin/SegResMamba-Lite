@@ -1,7 +1,7 @@
 """
 【Optimized 训练流程】
 完整训练流程：数据加载 + 模型 + 框架
-支持深层监督和 EMA
+支持深层监督和权重滑动平均（SWA 等权；历史命名"EMA"实为 SWA）
 """
 
 import os
@@ -19,6 +19,7 @@ from shared.data.dataloader import get_train_dataloader, get_val_dataloader, aut
 from shared.utils.logger import setup_logger
 from shared.utils.device import setup_cuda_optimization
 from shared.utils.device_info import print_device_info
+from shared.utils.paths import resolve_log_prefix, resolve_model_dir, resolve_cache_dir
 
 from models import get_model
 from frame.train import OptimizedTrainer
@@ -37,7 +38,7 @@ def train(
     num_workers=None,              # 数据加载线程数，None 表示自动计算
     batch_size=None,            # 批次大小，None 表示自动计算
     use_disk_cache=False,        # 是否使用数据缓存
-    use_ema=True,               # 是否启用 EMA 指数移动平均
+    use_swa=True,               # 是否启用权重滑动平均（SWA 等权；历史命名"EMA"实为 SWA）
     use_deep_supervision=False, # 是否启用深层监督
     max_epochs=150,              # 训练轮数
     val_interval=5,             # 验证间隔 (每N个epoch验证一次)
@@ -45,6 +46,8 @@ def train(
     # 设备参数
     # ═══════════════════════════════════════════════════════════════════════
     device=None,                 # 设备类型 (cuda/cpu)
+    model_dir="",                # 自定义权重保存目录（空=默认 pipeline/models/{分辨率}mm_{设备}）
+    log_name="",                 # 自定义日志名称前缀（空=默认 train_{版本}_{分辨率}mm）
 ):
     """
     训练入口
@@ -56,7 +59,7 @@ def train(
         num_workers: 数据加载线程数
         batch_size: 批次大小
         use_disk_cache: 是否使用数据缓存
-        use_ema: 是否启用 EMA
+        use_swa: 是否启用权重滑动平均（SWA 等权）
         use_deep_supervision: 是否启用深层监督
         max_epochs: 训练轮数
         val_interval: 验证间隔
@@ -66,7 +69,7 @@ def train(
     # 日志配置
     # ─────────────────────────────────────────────────────────────────────
     LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
-    logger = setup_logger(LOG_DIR, f"train_{version_name}_{resolution}mm")
+    logger = setup_logger(LOG_DIR, resolve_log_prefix(log_name, f"train_{version_name}_{resolution}mm"))
 
     # ─────────────────────────────────────────────────────────────────────
     # 设备信息
@@ -102,7 +105,7 @@ def train(
             "batch_size": BATCH_SIZE,
             "num_workers": num_workers,
             "max_epochs": max_epochs,
-            "use_ema": use_ema,
+            "use_swa": use_swa,
             "use_deep_supervision": use_deep_supervision,
             "use_disk_cache": use_disk_cache,
             "val_interval": val_interval,
@@ -116,7 +119,7 @@ def train(
         },
     }, title="训练配置")
 
-    current_cache_dir = f"{CACHE_DIR}_{resolution}" if use_disk_cache else None
+    current_cache_dir = resolve_cache_dir(resolution, CACHE_DIR) if use_disk_cache else None
     pixdim = (resolution, resolution, resolution)
 
     if use_disk_cache and current_cache_dir:
@@ -177,11 +180,15 @@ def train(
         weight_decay=1e-5,
         scheduler_type="CosineAnnealingLR",
         max_epochs=max_epochs,
-        use_ema=use_ema,
+        use_swa=use_swa,
         use_deep_supervision=use_deep_supervision,
     )
 
-    MODEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", f"{resolution}mm_{DEVICE.replace(':', '')}")
+    MODEL_DIR = resolve_model_dir(
+        model_dir,
+        os.path.dirname(os.path.abspath(__file__)),
+        f"{resolution}mm_{DEVICE.replace(':', '')}",
+    )
     os.makedirs(MODEL_DIR, exist_ok=True)
 
     best_metric = -1
@@ -205,9 +212,14 @@ def train(
                 latest_epoch_file = max(epoch_files, key=lambda x: int(os.path.basename(x).split('_')[1].split('.')[0]))
                 print(f"使用文件：{latest_epoch_file}")
                 model.load_state_dict(torch.load(latest_epoch_file, map_location=DEVICE))
-                if trainer.ema is not None and os.path.exists(os.path.join(MODEL_DIR, "best_metric_ema_model.pth")):
-                    trainer.ema.load_state_dict(torch.load(os.path.join(MODEL_DIR, "best_metric_ema_model.pth"), map_location=DEVICE))
-                    print(f"✓ 已恢复 EMA 状态")
+                if trainer.swa is not None:
+                    # 平均权重恢复兼容双文件名：新名 best_metric_swa_model.pth 优先，旧名 best_metric_ema_model.pth（历史命名）回退
+                    _swa_new = os.path.join(MODEL_DIR, "best_metric_swa_model.pth")
+                    _swa_old = os.path.join(MODEL_DIR, "best_metric_ema_model.pth")
+                    _swa_path = _swa_new if os.path.exists(_swa_new) else (_swa_old if os.path.exists(_swa_old) else None)
+                    if _swa_path:
+                        trainer.swa.load_state_dict(torch.load(_swa_path, map_location=DEVICE))
+                        print(f"✓ 已恢复平均权重状态（{os.path.basename(_swa_path)}）")
                 print(f"✓ 已从 {latest_epoch_file} 恢复模型权重")
                 print(f"⚠️  但优化器状态和其他信息已丢失，将从头开始训练")
             else:
@@ -217,8 +229,10 @@ def train(
             trainer.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
             trainer.scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
             trainer.scaler.load_state_dict(checkpoint["scaler_state_dict"])
-            if trainer.ema is not None and "ema_state_dict" in checkpoint:
-                trainer.ema.load_state_dict(checkpoint["ema_state_dict"])
+            # 断点兼容：新键 swa_state_dict 优先，旧键 ema_state_dict（历史命名）同样可恢复
+            _avg_sd = checkpoint.get("swa_state_dict") or checkpoint.get("ema_state_dict")
+            if trainer.swa is not None and _avg_sd is not None:
+                trainer.swa.load_state_dict(_avg_sd)
             start_epoch = checkpoint["epoch"]
             best_metric = checkpoint.get("best_metric", -1)
             best_metric_epoch = checkpoint.get("best_metric_epoch", -1)
@@ -245,8 +259,8 @@ def train(
             "best_metric": best_metric,
             "best_metric_epoch": best_metric_epoch,
         }
-        if trainer.ema is not None:
-            checkpoint_dict["ema_state_dict"] = trainer.ema.get_state_dict()
+        if trainer.swa is not None:
+            checkpoint_dict["swa_state_dict"] = trainer.swa.get_state_dict()
         torch.save(
             checkpoint_dict,
             latest_checkpoint,
@@ -271,10 +285,10 @@ def train(
                     best_metric = metrics["dice_wt"]
                     best_metric_epoch = epoch + 1
                     torch.save(model.state_dict(), os.path.join(MODEL_DIR, "best_metric_model.pth"))
-                    if trainer.ema is not None:
+                    if trainer.swa is not None:
                         torch.save(
-                            trainer.ema.get_state_dict(),
-                            os.path.join(MODEL_DIR, "best_metric_ema_model.pth")
+                            trainer.swa.get_state_dict(),
+                            os.path.join(MODEL_DIR, "best_metric_swa_model.pth")
                         )
                     print(f"新的最佳 WT Dice: {best_metric:.4f}")
 
@@ -288,8 +302,8 @@ def train(
                     "best_metric": best_metric,
                     "best_metric_epoch": best_metric_epoch,
                 }
-                if trainer.ema is not None:
-                    checkpoint_dict["ema_state_dict"] = trainer.ema.get_state_dict()
+                if trainer.swa is not None:
+                    checkpoint_dict["swa_state_dict"] = trainer.swa.get_state_dict()
                 torch.save(
                     checkpoint_dict,
                     latest_checkpoint,
@@ -314,13 +328,17 @@ if __name__ == "__main__":
     parser.add_argument("--model", type=str, default="segresnet", help="模型名称")
     parser.add_argument("--resolution", type=float, default=1.0, help="分辨率")
     parser.add_argument("--workers", type=str, default="auto", help="数据加载线程数 (auto/数字，auto表示自动计算)")
-    parser.add_argument("--batch", type=int, default=2, help="批次大小")
+    parser.add_argument("--batch", type=str, default="2", help="批次大小 (auto/数字，auto表示自动计算)")
     parser.add_argument("--cache", action="store_true", help="启用硬盘缓存")
-    parser.add_argument("--ema", action="store_true", help="启用 EMA")
+    parser.add_argument("--swa", action="store_true", help="启用权重滑动平均（SWA 等权；历史命名 --ema 实为 SWA）")
     parser.add_argument("--ds", action="store_true", help="启用深层监督")
     parser.add_argument("--epochs", type=int, default=150, help="训练轮数")
     parser.add_argument("--val_interval", type=int, default=5, help="验证间隔")
     parser.add_argument("--device", type=str, default=None, help="设备 (cuda/cpu)")
+    parser.add_argument("--model_dir", type=str, default="",
+                        help="自定义权重保存目录（优先级高于默认规则；默认 pipeline/models/{分辨率}mm_{设备}）")
+    parser.add_argument("--log_name", type=str, default="",
+                        help="自定义日志名称前缀（默认 train_{版本}_{分辨率}mm）")
     args = parser.parse_args()
     
     # 解析 num_workers 参数
@@ -350,9 +368,11 @@ if __name__ == "__main__":
         num_workers=workers_arg,
         batch_size=batch_arg,
         use_disk_cache=args.cache,
-        use_ema=args.ema,
+        use_swa=args.swa,
         use_deep_supervision=args.ds,
         max_epochs=args.epochs,
         val_interval=args.val_interval,
         device=args.device,
+        model_dir=args.model_dir,
+        log_name=args.log_name,
     )

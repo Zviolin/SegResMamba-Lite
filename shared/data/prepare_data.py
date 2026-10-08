@@ -22,6 +22,7 @@ if project_root not in sys.path:
 
 from shared.data.dataloader import get_data_list, get_train_pre_transforms
 from shared.utils.device_info import print_device_info
+from shared.utils.paths import resolve_cache_dir
 
 
 def prepare_data(
@@ -66,6 +67,13 @@ def prepare_data(
     CACHE_DIR = r"D:\Codes\SRTP\BraTS\DATA\BraTS-GLI\TrainingDATA\persistent_cache"
 
     assert abs(train_ratio + val_ratio + test_ratio - 1.0) < 1e-6, "比例之和必须为1"
+
+    # ═══ 修复：固定全局随机种子（否则 --samples 随机选取不可复现）═══
+    # 此前 L94 的 random.sample 用的是 OS 熵种子，--seed 只被打印未生效，
+    # 导致指定 max_samples 时每次运行选出的病例不同；sklearn 的
+    # train_test_split 用独立 random_state 不受影响。加这行后：
+    # 同 seed 下 random.sample 选取结果逐位一致，全流程可复现。
+    random.seed(seed)
 
     print(f"数据目录: {DATA_DIR}")
 
@@ -124,7 +132,7 @@ def prepare_data(
     print(f"验证样本数: {len(val_files)}")
     print(f"测试样本数: {len(test_files)}")
 
-    current_cache_dir = f"{CACHE_DIR}_{resolution}" if generate_cache_flag else None
+    current_cache_dir = resolve_cache_dir(resolution, CACHE_DIR) if generate_cache_flag else None
     if current_cache_dir:
         print(f"\n缓存目录: {current_cache_dir}")
 
@@ -305,7 +313,7 @@ if __name__ == "__main__":
 
     DATA_DIR = r"g:\Codes\Python\SRTP\Essay\Data\Brain\TCIA-BraTS\DATA\BraTS2023\BraTS-GLI\TrainingData\ASNR-MICCAI-BraTS2023-GLI-Challenge-TrainingData"
     CACHE_DIR = r"D:\Codes\SRTP\BraTS\DATA\BraTS-GLI\TrainingDATA\persistent_cache"
-    cache_dir = f"{CACHE_DIR}_{resolution}" if enable_cache else None  # 修正：正确的目录路径
+    cache_dir = resolve_cache_dir(resolution, CACHE_DIR) if enable_cache else None  # 修正：正确的目录路径
     current_cache_dir = cache_dir  # 保持变量名一致性
 
     import logging

@@ -4,16 +4,18 @@
 
 参数说明：
 - model_params: 模型参数
-- optimizer_type: 优化器类型 ("AdamW" / "Adam")
-- scheduler_type: 调度器类型 ("CosineAnnealingLR")
+- optimizer_type: 优化器类型 ("AdamW" / "Adam" / "SGD")
+- scheduler_type: 调度器类型 ("CosineAnnealingLR" / "Poly")
 - kwargs: 其他参数
 """
 
 import torch
-from torch.optim import AdamW, Adam
+from torch.optim import AdamW, Adam, SGD
 
 from .adamw import AdamWOptimizer
 from .cosine_scheduler import CosineAnnealingLR
+from .poly_scheduler import PolyLR
+from .swa import SWA
 from .ema import EMA
 from .deep_supervision import DeepSupervision
 
@@ -21,11 +23,15 @@ from .deep_supervision import DeepSupervision
 OPTIM_REGISTRY = {
     "AdamW": AdamW,
     "Adam": Adam,
+    # 官方 SegMamba 复现专用（SegMamba-Official 历史口径，2026-10-07 加回）
+    "SGD": SGD,
 }
 
 
 SCHEDULER_REGISTRY = {
     "CosineAnnealingLR": CosineAnnealingLR,
+    # 官方 SegMamba 复现专用（SegMamba-Official 历史口径，2026-10-07 加回）
+    "Poly": PolyLR,
 }
 
 
@@ -74,6 +80,8 @@ __all__ = [
     "get_scheduler",
     "AdamWOptimizer",
     "CosineAnnealingLR",
+    "PolyLR",
+    "SWA",
     "EMA",
     "DeepSupervision",
 ]

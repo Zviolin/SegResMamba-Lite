@@ -3,7 +3,7 @@
 统一获取损失函数
 
 参数说明：
-- loss_name: 损失函数名称 ("DiceCELoss" / "DiceFocalLoss" / "DiceLoss" / "V6Loss" / "V6LossSimple")
+- loss_name: 损失函数名称 ("DiceCELoss" / "DiceFocalLoss" / "DiceLoss" / "V6Loss" / "V6LossSimple" / "CrossEntropyLoss")
 - kwargs: 传递给损失函数的其他参数
 """
 
@@ -11,6 +11,7 @@ from .dice_ce_loss import DiceCELoss
 from .dice_focal_loss import DiceFocalLoss
 from .dice_loss import DiceLoss
 from .v6_loss import V6Loss, V6LossSimple
+from .cross_entropy_loss import CrossEntropyLoss
 
 
 LOSS_REGISTRY = {
@@ -19,6 +20,8 @@ LOSS_REGISTRY = {
     "DiceLoss": DiceLoss,
     "V6Loss": V6Loss,
     "V6LossSimple": V6LossSimple,
+    # 官方 SegMamba 复现专用（SegMamba-Official 历史口径，2026-10-07 加回）
+    "CrossEntropyLoss": CrossEntropyLoss,
 }
 
 
@@ -47,6 +50,7 @@ __all__ = [
     "DiceLoss",
     "V6Loss",
     "V6LossSimple",
+    "CrossEntropyLoss",
     "get_loss",
     "LOSS_REGISTRY",
 ]

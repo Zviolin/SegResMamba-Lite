@@ -7,6 +7,7 @@ import os
 
 from .logger import Logger, setup_logger
 from .device import get_device, check_gpu_compatibility, setup_cuda_optimization
+from .paths import resolve_model_dir, resolve_log_prefix, resolve_cache_parent, resolve_cache_dir
 from .checkpoint import ModelCheckpoint, load_checkpoint
 from .quantize import quantize_model, benchmark_inference, get_model_from_checkpoint
 
@@ -58,4 +59,8 @@ __all__ = [
     "quantize_model",
     "benchmark_inference",
     "get_model_from_checkpoint",
+    "resolve_model_dir",
+    "resolve_log_prefix",
+    "resolve_cache_parent",
+    "resolve_cache_dir",
 ]

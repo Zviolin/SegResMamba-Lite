@@ -4,8 +4,8 @@
 
 按照 BraTS 2023 官方标准：
 - 对每个病例计算：lesion_dice = sum(dice) / (num_gt_lesions + num_fp)
-- 对每个病例计算：lesion_hd95 = (sum(hd) + num_fp * 374) / (num_gt_lesions + num_fp)
-- 注意：FP 惩罚同时应用于 Dice 和 HD95，每个 FP 给 HD95 加 374 惩罚值
+- 对每个病例计算：lesion_hd95 = sum(hd) / num_gt_lesions
+- 注意：FP 惩罚只应用于 Dice；HD95 分母仅为 GT 病灶数（表面距离已自然体现 FP 的距离惩罚）
 - 全局汇总：对所有病例的 lesion-wise 分数取算术平均
 
 参数说明：

@@ -74,6 +74,9 @@ class BoundaryAttention3D(nn.Module):
         edges = self.edge_conv(x)
         edge_mag = edges.abs().mean(dim=1, keepdim=True)  # (B, 1, D, H, W)
         # 空间归一化
+        # 注意：此处为全 batch + 全空间 max 归一化，训练（整图输入）与推理（滑窗逐窗输入）
+        # 的归一化尺度存在轻微分布差异；V11/V12 历史结果基于此口径产出，为保持
+        # 代码与已定格实验数字的可复现对应关系，不再修改归一化方式
         edge_mag = edge_mag / (edge_mag.max() + 1e-6)
         # 门控增强：边界区域特征加权强化
         w = self.gate(x) * edge_mag

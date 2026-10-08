@@ -21,6 +21,7 @@ from shared.data.dataloader import get_train_dataloader, get_val_dataloader, aut
 from shared.utils.logger import setup_logger
 from shared.utils.device import setup_cuda_optimization
 from shared.utils.device_info import print_device_info
+from shared.utils.paths import resolve_log_prefix, resolve_model_dir, resolve_cache_dir
 
 from models import get_model
 from frame.train import OptimizedTrainer
@@ -33,18 +34,20 @@ def train(
     num_workers=None,              # 数据加载线程数，None 表示自动计算
     batch_size=None,            # 批次大小，None 表示自动计算
     use_disk_cache=False,
-    use_ema=True,
+    use_swa=True,
     use_deep_supervision=False,
     max_epochs=1000,
     val_interval=2,
     device=None,
+    model_dir="",                # 自定义权重保存目录（空=默认 pipeline/models/{分辨率}mm_{设备}）
+    log_name="",                 # 自定义日志名称前缀（空=默认 train_{版本}_{分辨率}mm）
 ):
     """
     SegMamba官方训练流程
     按照官方配置: SGD, lr=1e-2, batch_size=2, max_epochs=1000
     """
     LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
-    logger = setup_logger(LOG_DIR, f"train_{version_name}_{resolution}mm")
+    logger = setup_logger(LOG_DIR, resolve_log_prefix(log_name, f"train_{version_name}_{resolution}mm"))
     
     print_device_info(logger)
     setup_cuda_optimization()
@@ -72,7 +75,7 @@ def train(
             "batch_size": BATCH_SIZE,
             "num_workers": num_workers,
             "max_epochs": max_epochs,
-            "use_ema": use_ema,
+            "use_swa": use_swa,
             "use_deep_supervision": use_deep_supervision,
             "use_disk_cache": use_disk_cache,
             "val_interval": val_interval,
@@ -88,7 +91,7 @@ def train(
         },
     }, title="训练配置 - OFFICIAL SegMamba")
     
-    current_cache_dir = f"{CACHE_DIR}_{resolution}" if use_disk_cache else None
+    current_cache_dir = resolve_cache_dir(resolution, CACHE_DIR) if use_disk_cache else None
     pixdim = (resolution, resolution, resolution)
     
     if use_disk_cache and current_cache_dir:
@@ -150,7 +153,7 @@ def train(
         weight_decay=WEIGHT_DECAY,
         scheduler_type="Poly",
         max_epochs=max_epochs,
-        use_ema=use_ema,
+        use_swa=use_swa,
         use_deep_supervision=use_deep_supervision,
     )
     
@@ -163,7 +166,11 @@ def train(
         nesterov=True
     )
     
-    MODEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", f"{resolution}mm_{DEVICE.replace(':', '')}")
+    MODEL_DIR = resolve_model_dir(
+        model_dir,
+        os.path.dirname(os.path.abspath(__file__)),
+        f"{resolution}mm_{DEVICE.replace(':', '')}",
+    )
     os.makedirs(MODEL_DIR, exist_ok=True)
     
     best_metric = -1
@@ -184,8 +191,10 @@ def train(
             trainer.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
             trainer.scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
             trainer.scaler.load_state_dict(checkpoint["scaler_state_dict"])
-            if trainer.ema is not None and "ema_state_dict" in checkpoint:
-                trainer.ema.load_state_dict(checkpoint["ema_state_dict"])
+            # 断点兼容：新键 swa_state_dict 优先，旧键 ema_state_dict（历史命名）同样可恢复
+            _avg_sd = checkpoint.get("swa_state_dict") or checkpoint.get("ema_state_dict")
+            if trainer.swa is not None and _avg_sd is not None:
+                trainer.swa.load_state_dict(_avg_sd)
             start_epoch = checkpoint["epoch"]
             best_metric = checkpoint.get("best_metric", -1)
             best_metric_epoch = checkpoint.get("best_metric_epoch", -1)
@@ -209,8 +218,8 @@ def train(
             "best_metric": best_metric,
             "best_metric_epoch": best_metric_epoch,
         }
-        if trainer.ema is not None:
-            checkpoint_dict["ema_state_dict"] = trainer.ema.get_state_dict()
+        if trainer.swa is not None:
+            checkpoint_dict["swa_state_dict"] = trainer.swa.get_state_dict()
         torch.save(checkpoint_dict, latest_checkpoint)
         
         if (epoch + 1) % val_interval == 0:
@@ -231,10 +240,10 @@ def train(
                     best_metric = metrics["dice_wt"]
                     best_metric_epoch = epoch + 1
                     torch.save(model.state_dict(), os.path.join(MODEL_DIR, "best_metric_model.pth"))
-                    if trainer.ema is not None:
+                    if trainer.swa is not None:
                         torch.save(
-                            trainer.ema.get_state_dict(),
-                            os.path.join(MODEL_DIR, "best_metric_ema_model.pth")
+                            trainer.swa.get_state_dict(),
+                            os.path.join(MODEL_DIR, "best_metric_swa_model.pth")
                         )
                     print(f"新的最佳 WT Dice: {best_metric:.4f}")
                 
@@ -247,8 +256,8 @@ def train(
                     "best_metric": best_metric,
                     "best_metric_epoch": best_metric_epoch,
                 }
-                if trainer.ema is not None:
-                    checkpoint_dict["ema_state_dict"] = trainer.ema.get_state_dict()
+                if trainer.swa is not None:
+                    checkpoint_dict["swa_state_dict"] = trainer.swa.get_state_dict()
                 torch.save(checkpoint_dict, latest_checkpoint)
                 print(f"✓ 验证完成，checkpoint 已更新")
                 
@@ -269,12 +278,16 @@ if __name__ == "__main__":
     parser.add_argument("--model", type=str, default="segmamba", help="模型名称")
     parser.add_argument("--resolution", type=float, default=2.0, help="分辨率")
     parser.add_argument("--workers", type=str, default="auto", help="数据加载线程数 (auto/数字，auto表示自动计算)")
-    parser.add_argument("--batch", type=int, default=2, help="批次大小 (official: 2)")
+    parser.add_argument("--batch", type=str, default="2", help="批次大小 (auto/数字，auto表示自动计算)")
     parser.add_argument("--cache", action="store_true", help="启用硬盘缓存")
-    parser.add_argument("--ema", action="store_true", help="启用EMA")
+    parser.add_argument("--swa", action="store_true", help="启用权重滑动平均（SWA 等权；历史命名 --ema 实为 SWA）")
     parser.add_argument("--epochs", type=int, default=1000, help="训练轮数 (official: 1000)")
     parser.add_argument("--val_interval", type=int, default=2, help="验证间隔 (official: 2)")
     parser.add_argument("--device", type=str, default=None, help="设备")
+    parser.add_argument("--model_dir", type=str, default="",
+                        help="自定义权重保存目录（优先级高于默认规则；默认 pipeline/models/{分辨率}mm_{设备}）")
+    parser.add_argument("--log_name", type=str, default="",
+                        help="自定义日志名称前缀（默认 train_{版本}_{分辨率}mm）")
     args = parser.parse_args()
     
     # 解析 num_workers 参数
@@ -304,9 +317,11 @@ if __name__ == "__main__":
         num_workers=workers_arg,
         batch_size=batch_arg,
         use_disk_cache=args.cache,
-        use_ema=args.ema,
+        use_swa=args.swa,
         max_epochs=args.epochs,
         val_interval=args.val_interval,
         device=args.device,
+        model_dir=args.model_dir,
+        log_name=args.log_name,
     )
 

@@ -29,6 +29,9 @@ __pycache__/
 */pipeline/*/*/__pycache__/
 */pipeline/*/*/*/__pycache__/
 
+# 清理备份区（无用日志/权重待删除区，不入库）
+_cleanup_*/
+
 # 系统文件
 .DS_Store
 Thumbs.db
@@ -44,7 +47,7 @@ desktop.ini
 # 临时文件
 *.tmp
 *.bak
-*.log  # 注意：pip 临时日志也被排除
+*.log
 *.pid
 
 # 编译输出

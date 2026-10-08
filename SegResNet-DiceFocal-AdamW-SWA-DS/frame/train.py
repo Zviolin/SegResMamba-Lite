@@ -1,7 +1,8 @@
 """
 【Optimized 训练框架】
 框架：预测+Loss+反向+更新
-支持深层监督和 EMA（基于 PyTorch AveragedModel）
+支持深层监督和权重滑动平均（SWA 等权，基于 PyTorch AveragedModel；
+历史命名"EMA"实为等权 SWA，2026-10-05 命名修正）
 """
 
 import os
@@ -17,9 +18,42 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from shared.losses import get_loss
 from shared.optim import get_optimizer, get_scheduler
-from shared.optim.ema import EMA
+from shared.optim.swa import SWA
 from shared.inference.sliding_window import sliding_window_inference
 from shared.inference.postprocess import brats_label_mapping
+
+# 空边界 HD95 满额惩罚距离（mm），与 lesion-wise 口径保持一致
+HD95_EMPTY_PENALTY = 374.0
+
+
+def _is_empty_volume(x):
+    """判断张量或张量列表是否全为 0（空体积）"""
+    if isinstance(x, (list, tuple)):
+        return all(_is_empty_volume(t) for t in x)
+    return not bool(torch.any(x > 0))
+
+
+def _safe_hd95(metric, pred, gt, spacing):
+    """单病例 HD95 计算（空边界安全版）
+
+    - 空-空（无病灶且未误检）：记 0（完美预测）
+    - 一空一非空（整区漏检或假阳性）：记 374 满额惩罚（与 lesion-wise 口径一致）
+    - 其余正常情形走 MONAI 计算，inf/nan 兜底为 374
+    避免旧版对 inf 记 0 美化最差预测的问题；spacing 沿用基线历史口径（mm 单位）
+    """
+    pred_empty = _is_empty_volume(pred)
+    gt_empty = _is_empty_volume(gt)
+    if pred_empty and gt_empty:
+        return 0.0
+    if pred_empty or gt_empty:
+        return HD95_EMPTY_PENALTY
+    metric.reset()
+    metric(y_pred=pred, y=gt, spacing=spacing)
+    val = metric.aggregate().item()
+    metric.reset()
+    if np.isnan(val) or np.isinf(val):
+        return HD95_EMPTY_PENALTY
+    return val
 
 
 class OptimizedTrainer:
@@ -35,13 +69,12 @@ class OptimizedTrainer:
         weight_decay=1e-5,
         scheduler_type="CosineAnnealingLR",
         max_epochs=150,
-        use_ema=True,
-        ema_decay=0.999,
+        use_swa=True,
         use_deep_supervision=False,
     ):
         self.device = device
         self.max_epochs = max_epochs
-        self.use_ema = use_ema
+        self.use_swa = use_swa
         self.use_deep_supervision = use_deep_supervision
 
         self.model = model.to(device)
@@ -59,10 +92,11 @@ class OptimizedTrainer:
         )
         self.scaler = torch.amp.GradScaler('cuda', enabled=(device == "cuda"))
 
-        if use_ema:
-            self.ema = EMA(model, decay=ema_decay)
+        if use_swa:
+            # SWA 等权平均（历史命名"EMA"实为等权 SWA，decay 从未生效）
+            self.swa = SWA(model)
         else:
-            self.ema = None
+            self.swa = None
 
     def compute_loss(self, outputs, labels):
         """计算损失，支持深层监督"""
@@ -98,8 +132,8 @@ class OptimizedTrainer:
         self.scaler.step(self.optimizer)
         self.scaler.update()
 
-        if self.ema:
-            self.ema.update()
+        if self.swa:
+            self.swa.update()
 
         return loss.item()
 
@@ -120,9 +154,9 @@ class OptimizedTrainer:
         return epoch_loss / step
 
     def _get_eval_model(self):
-        """获取验证用的模型（原始模型或 EMA 模型）"""
-        if self.ema is not None:
-            return self.ema.ema_model
+        """获取验证用的模型（原始模型或平均权重模型）"""
+        if self.swa is not None:
+            return self.swa.averaged_model
         return self.model
 
     @torch.no_grad()
@@ -264,22 +298,13 @@ class OptimizedTrainer:
                 d_et = temp_dice.aggregate().item()
                 temp_dice.reset()
 
-                temp_hd95(y_pred=pred_wt, y=true_wt, spacing=spacing)
-                h_wt = temp_hd95.aggregate().item()
-                temp_hd95.reset()
-                temp_hd95(y_pred=pred_tc, y=true_tc, spacing=spacing)
-                h_tc = temp_hd95.aggregate().item()
-                temp_hd95.reset()
-                temp_hd95(y_pred=pred_et, y=true_et, spacing=spacing)
-                h_et = temp_hd95.aggregate().item()
-                temp_hd95.reset()
+                h_wt = _safe_hd95(temp_hd95, pred_wt, true_wt, spacing)
+                h_tc = _safe_hd95(temp_hd95, pred_tc, true_tc, spacing)
+                h_et = _safe_hd95(temp_hd95, pred_et, true_et, spacing)
 
                 d_wt = 1.0 if np.isnan(d_wt) or np.isinf(d_wt) else d_wt
                 d_tc = 1.0 if np.isnan(d_tc) or np.isinf(d_tc) else d_tc
                 d_et = 1.0 if np.isnan(d_et) or np.isinf(d_et) else d_et
-                h_wt = 0.0 if np.isnan(h_wt) or np.isinf(h_wt) else h_wt
-                h_tc = 0.0 if np.isnan(h_tc) or np.isinf(h_tc) else h_tc
-                h_et = 0.0 if np.isnan(h_et) or np.isinf(h_et) else h_et
 
                 with open(results_file, "a") as f:
                     f.write(f"{case_id},{d_wt:.4f},{d_tc:.4f},{d_et:.4f},{h_wt:.4f},{h_tc:.4f},{h_et:.4f}\n")

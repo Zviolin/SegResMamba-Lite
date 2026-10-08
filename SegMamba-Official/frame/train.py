@@ -1,7 +1,8 @@
 """
 【Optimized 训练框架】
 框架：预测+Loss+反向+更新
-支持深层监督和 EMA（基于 PyTorch AveragedModel）
+支持深层监督和权重滑动平均（SWA 等权，基于 PyTorch AveragedModel；
+历史命名"EMA"实为等权 SWA，2026-10-05 命名修正）
 """
 
 import os
@@ -17,7 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from shared.losses import get_loss
 from shared.optim import get_optimizer, get_scheduler
-from shared.optim.ema import EMA
+from shared.optim.swa import SWA
 from shared.inference.sliding_window import sliding_window_inference
 from shared.inference.postprocess import brats_label_mapping
 
@@ -35,13 +36,12 @@ class OptimizedTrainer:
         weight_decay=1e-5,
         scheduler_type="CosineAnnealingLR",
         max_epochs=150,
-        use_ema=True,
-        ema_decay=0.999,
+        use_swa=True,
         use_deep_supervision=False,
     ):
         self.device = device
         self.max_epochs = max_epochs
-        self.use_ema = use_ema
+        self.use_swa = use_swa
         self.use_deep_supervision = use_deep_supervision
 
         self.model = model.to(device)
@@ -59,10 +59,11 @@ class OptimizedTrainer:
         )
         self.scaler = torch.amp.GradScaler('cuda', enabled=(device == "cuda"))
 
-        if use_ema:
-            self.ema = EMA(model, decay=ema_decay)
+        if use_swa:
+            # SWA 等权平均（历史命名"EMA"实为等权 SWA）
+            self.swa = SWA(model)
         else:
-            self.ema = None
+            self.swa = None
 
     def compute_loss(self, outputs, labels):
         """计算损失，支持深层监督"""
@@ -98,8 +99,8 @@ class OptimizedTrainer:
         self.scaler.step(self.optimizer)
         self.scaler.update()
 
-        if self.ema:
-            self.ema.update()
+        if self.swa:
+            self.swa.update()
 
         return loss.item()
 
@@ -120,9 +121,9 @@ class OptimizedTrainer:
         return epoch_loss / step
 
     def _get_eval_model(self):
-        """获取验证用的模型（原始模型或 EMA 模型）"""
-        if self.ema is not None:
-            return self.ema.ema_model
+        """获取验证用的模型（原始模型或平均权重模型）"""
+        if self.swa is not None:
+            return self.swa.averaged_model
         return self.model
 
     @torch.no_grad()
