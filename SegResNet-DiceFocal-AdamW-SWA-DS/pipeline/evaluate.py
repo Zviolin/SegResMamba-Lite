@@ -16,7 +16,7 @@ sys.path.insert(0, _version_root)
 sys.path.insert(0, _code_root)
 
 from shared.data.dataloader import get_val_dataloader, get_data_list, auto_roi_size_from_cache
-from shared.utils.paths import resolve_cache_dir
+from shared.utils.paths import resolve_cache_dir, resolve_data_root
 from shared.utils.checkpoint import load_checkpoint
 from shared.utils.device import setup_cuda_optimization
 from shared.utils.device_info import print_device_info
@@ -37,6 +37,8 @@ def evaluate(
     resolution=1.0,             # 数据分辨率 (1.0/2.0/3.0/4.0 mm)
     checkpoint_path=None,         # 检查点路径
     runs=1,                      # 评估次数 (>1 时取平均)
+    cache_parent="",             # 数据缓存父目录覆盖（优先级：命令行 > 环境变量 SRTP_CACHE_PARENT > 各项目默认）
+    data_root="",                # 原始 BraTS TrainingData 目录覆盖（优先级：命令行 > 环境变量 BRATS_DATA_ROOT > 默认）
     # ═══════════════════════════════════════════════════════════════════════
     # 评估参数
     # ═══════════════════════════════════════════════════════════════════════
@@ -75,7 +77,11 @@ def evaluate(
     # ─────────────────────────────────────────────────────────────────────
     # 路径配置
     # ─────────────────────────────────────────────────────────────────────
-    DATA_DIR = r"g:\Codes\Python\SRTP\Essay\Data\Brain\TCIA-BraTS\DATA\BraTS2023\BraTS-GLI\TrainingData\ASNR-MICCAI-BraTS2023-GLI-Challenge-TrainingData"
+    # 可迁移性：路径解析优先级 命令行 > 环境变量 > 历史默认
+    DATA_DIR = resolve_data_root(
+        r"g:\Codes\Python\SRTP\Essay\Data\Brain\TCIA-BraTS\DATA\BraTS2023\BraTS-GLI\TrainingData\ASNR-MICCAI-BraTS2023-GLI-Challenge-TrainingData",
+        data_root,
+    )
     CACHE_DIR = r"D:\Codes\SRTP\BraTS\DATA\BraTS-GLI\TrainingDATA\persistent_cache"
 
     LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
@@ -117,7 +123,7 @@ def evaluate(
 
     all_data = get_data_list(DATA_DIR, mode="train")
 
-    current_cache_dir = resolve_cache_dir(resolution, CACHE_DIR) if use_disk_cache else None
+    current_cache_dir = resolve_cache_dir(resolution, CACHE_DIR, cli_parent=cache_parent) if use_disk_cache else None
 
     if use_disk_cache and current_cache_dir:
         split_file = os.path.join(current_cache_dir, "split_info.json")
@@ -273,6 +279,11 @@ if __name__ == "__main__":
     parser.add_argument("--device", type=str, default=None, help="设备 (cuda/cpu)")
     parser.add_argument("--no_lesion_wise", action="store_true", help="禁用 lesion-wise 指标")
     parser.add_argument("--runs", type=int, default=1, help="评估次数 (>1 时取平均)")
+    # 跨卡包合并的可选开关（默认关闭，行为与历史完全一致）
+    parser.add_argument("--cache_parent", type=str, default="",
+                        help="数据缓存父目录覆盖（优先级：命令行 > 环境变量 SRTP_CACHE_PARENT > 各项目默认；最终目录 = {parent}_{分辨率}）")
+    parser.add_argument("--data_root", type=str, default="",
+                        help="原始 BraTS TrainingData 目录覆盖（优先级：命令行 > 环境变量 BRATS_DATA_ROOT > 默认）")
     args = parser.parse_args()
     
     # 解析 num_workers 参数
@@ -295,4 +306,6 @@ if __name__ == "__main__":
         lesion_wise=not args.no_lesion_wise,
         runs=args.runs,
         device=args.device,
+        cache_parent=args.cache_parent,
+        data_root=args.data_root,
     )

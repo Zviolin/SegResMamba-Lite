@@ -48,7 +48,7 @@ sys.path.insert(0, _CODE_ROOT)
 
 from shared.data.dataloader import get_train_dataloader, get_val_dataloader, auto_roi_size_from_cache
 from shared.utils.logger import setup_logger
-from shared.utils.device import setup_cuda_optimization
+from shared.utils.device import setup_cuda_optimization, setup_determinism
 from shared.utils.device_info import print_device_info
 from shared.utils.paths import resolve_log_prefix, resolve_model_dir, resolve_cache_dir
 
@@ -82,6 +82,12 @@ def train(
     # 命令行扩展
     model_dir: str = "",        # 自定义权重保存目录（空=默认 pipeline/models/{分辨率}mm_{样本数}_{设备}）
     log_name: str = "",         # 自定义日志名称前缀（空=默认 train_{版本}_{分辨率}mm）
+    # 可选训练特性（默认关闭，行为与历史完全一致）
+    seed: int = 42,                # 训练随机种子（--deterministic 时锁定随机性，不影响数据划分缓存）
+    deterministic: bool = False,   # 可复现性：开启确定性训练（cudnn.deterministic + 确定性算法，不触碰 TF32）
+    cache_parent: str = "",        # 数据缓存父目录覆盖（优先级：命令行 > 环境变量 SRTP_CACHE_PARENT > 各项目默认）
+    skip_nonfinite: bool = False,  # 跳过非有限 loss（NaN/Inf）的 batch，不 backward/不更新/不进平均权重
+    best_weights: str = "raw",     # best_metric_model.pth 保存来源：raw=原始模型权重（历史口径）/ avg=验证所用的平均权重（SWA）
 ):
     """
     训练入口。
@@ -102,7 +108,16 @@ def train(
         val_interval: 每 N 个 epoch 验证一次
         use_swa: 是否启用权重滑动平均（SWA 等权）
         device: cuda / cpu
+        seed: 训练随机种子（--deterministic 时锁定随机性，不影响数据划分缓存）
+        deterministic: 是否开启确定性训练（cudnn.deterministic + 确定性算法，不触碰 TF32）
+        cache_parent: 数据缓存父目录覆盖（空=默认 / 环境变量 SRTP_CACHE_PARENT）
+        skip_nonfinite: 是否跳过非有限 loss（NaN/Inf）的 batch
+        best_weights: best_metric_model.pth 保存来源（raw=原始权重 / avg=SWA 平均权重）
     """
+    # 可复现性：cuBLAS 确定性工作区配置必须在任何 CUDA 上下文创建之前设置
+    if deterministic:
+        os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+
     # ── 日志 ──────────────────────────────────────────────────────────────
     LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
     logger = setup_logger(LOG_DIR, resolve_log_prefix(log_name, f"train_{version_name}_{resolution}mm"))
@@ -112,6 +127,10 @@ def train(
 
     # ── CUDA 优化 ─────────────────────────────────────────────────────────
     setup_cuda_optimization()
+
+    if deterministic:
+        # 可复现性：关 benchmark + 锁定确定性算法（不触碰 TF32，保持论文口径可比）
+        setup_determinism(seed)
 
     DEVICE = device if device else ("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -124,7 +143,10 @@ def train(
     if not use_disk_cache:
         raise ValueError("LightSegMamba-V3 必须启用缓存（--cache），请先运行 pipeline/gen_cache.py")
 
-    current_cache_dir = resolve_cache_dir(resolution, _DEFAULT_CACHE_PARENT, max_samples)
+    # max_samples 必须以关键字传参（新版 shared 签名第 3 位是 cli_parent）：
+    # cli_parent 覆盖父目录，max_samples 追加 _{N} 采样后缀，两者正交工作；
+    # 两者皆空/None 时与历史目录完全一致
+    current_cache_dir = resolve_cache_dir(resolution, _DEFAULT_CACHE_PARENT, max_samples=max_samples, cli_parent=cache_parent)
 
     # 标签用于模型保存目录区分（200 vs 全量）
     samples_tag = "full" if (max_samples is None or max_samples >= 1251) else f"{max_samples}"
@@ -231,6 +253,7 @@ def train(
         scheduler_type="CosineAnnealingLR",
         max_epochs=max_epochs,
         use_swa=use_swa,
+        skip_nonfinite=skip_nonfinite,
     )
 
     # ── 模型保存目录（区分 max_samples） ─────────────────────────────────
@@ -311,8 +334,16 @@ def train(
                     if metrics["dice_wt"] > best_metric:
                         best_metric = metrics["dice_wt"]
                         best_metric_epoch = epoch + 1
-                        torch.save(model.state_dict(), os.path.join(MODEL_DIR, "best_metric_model.pth"))
-                        print(f"新的最佳 WT Dice: {best_metric:.4f}")
+                        # --best_weights avg：保存验证所用的平均权重（SWA，与 validate 同源）；
+                        # raw（默认，历史口径）：保存原始模型权重
+                        if best_weights == "avg" and trainer.swa is not None:
+                            torch.save(trainer.swa.averaged_model.state_dict(), os.path.join(MODEL_DIR, "best_metric_model.pth"))
+                            print(f"新的最佳 WT Dice: {best_metric:.4f}（来源: 平均权重）")
+                        else:
+                            if best_weights == "avg":
+                                print("⚠️  未启用权重平均（--swa），--best_weights avg 回退保存原始权重")
+                            torch.save(model.state_dict(), os.path.join(MODEL_DIR, "best_metric_model.pth"))
+                            print(f"新的最佳 WT Dice: {best_metric:.4f}")
 
                     last_validated_epoch = epoch + 1
                 except Exception as e:
@@ -361,11 +392,21 @@ if __name__ == "__main__":
     parser.add_argument("--lr", type=float, default=1e-4, help="初始学习率")
     parser.add_argument("--weight-decay", type=float, default=1e-5, help="AdamW 权重衰减")
     parser.add_argument("--swa", action="store_true", help="启用权重滑动平均（SWA 等权；历史 --ema/--ema-decay 已废弃，历史命名 EMA 实为 SWA 且 decay 从未生效）")
+    parser.add_argument("--seed", type=int, default=42, help="训练随机种子（不影响数据划分缓存）")
     parser.add_argument("--device", type=str, default=None, help="设备 (cuda/cpu)")
     parser.add_argument("--model_dir", type=str, default="",
                         help="自定义权重保存目录（优先级高于默认规则；默认 pipeline/models/{分辨率}mm_{样本数}_{设备}）")
     parser.add_argument("--log_name", type=str, default="",
                         help="自定义日志名称前缀（默认 train_{版本}_{分辨率}mm）")
+    # 跨卡包合并的可选开关（默认关闭，行为与历史完全一致）
+    parser.add_argument("--deterministic", action="store_true", default=False,
+                        help="开启确定性训练：cudnn.deterministic + 确定性算法 + CUBLAS_WORKSPACE_CONFIG（不触碰 TF32）")
+    parser.add_argument("--cache_parent", type=str, default="",
+                        help="数据缓存父目录覆盖（优先级：命令行 > 环境变量 SRTP_CACHE_PARENT > 各项目默认；最终目录 = {parent}_{分辨率}）")
+    parser.add_argument("--skip_nonfinite", action="store_true", default=False,
+                        help="跳过非有限 loss（NaN/Inf）的 batch，不 backward/不更新/不进平均权重")
+    parser.add_argument("--best_weights", type=str, default="raw", choices=["raw", "avg"],
+                        help="best_metric_model.pth 保存来源：raw=原始权重（默认，历史口径）/ avg=验证所用的平均权重（SWA，需配合 --swa）")
     args = parser.parse_args()
 
     train(
@@ -385,4 +426,9 @@ if __name__ == "__main__":
         device=args.device,
         model_dir=args.model_dir,
         log_name=args.log_name,
+        seed=args.seed,
+        deterministic=args.deterministic,
+        cache_parent=args.cache_parent,
+        skip_nonfinite=args.skip_nonfinite,
+        best_weights=args.best_weights,
     )

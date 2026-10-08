@@ -38,11 +38,13 @@ class OptimizedTrainer:
         max_epochs=150,
         use_swa=True,
         use_deep_supervision=False,
+        skip_nonfinite=False,  # 跳过非有限 loss（NaN/Inf）的 batch：不 backward/不更新/不进平均权重（默认关闭，保持历史行为）
     ):
         self.device = device
         self.max_epochs = max_epochs
         self.use_swa = use_swa
         self.use_deep_supervision = use_deep_supervision
+        self.skip_nonfinite = skip_nonfinite
 
         self.model = model.to(device)
         self.loss_fn = get_loss(loss_name)
@@ -95,6 +97,12 @@ class OptimizedTrainer:
             outputs = self.model(inputs)
             loss = self.compute_loss(outputs, labels)
 
+        # 🛡️ 非有限损失防护（--skip_nonfinite 开启时）：NaN/Inf 一旦 backward
+        # 会污染 optimizer 与平均权重，后续权重全部 NaN 再也回不来，必须直接跳过该 batch
+        if self.skip_nonfinite and not torch.isfinite(loss):
+            # 跳过 backward/optimizer/平均权重，返回 (0.0, False) 让 epoch 累加跳过
+            return 0.0, False
+
         self.scaler.scale(loss).backward()
         self.scaler.step(self.optimizer)
         self.scaler.update()
@@ -102,23 +110,34 @@ class OptimizedTrainer:
         if self.swa:
             self.swa.update()
 
-        return loss.item()
+        return loss.item(), True
 
     def train_epoch(self, train_loader):
         """训练一个 epoch"""
         self.model.train()
         epoch_loss = 0
+        valid_steps = 0
+        skipped_steps = 0
         step = 0
 
         for batch_data in tqdm(train_loader, desc="Training"):
             step += 1
             inputs = batch_data["image"].to(self.device)
             labels = batch_data["label"].to(self.device)
-            loss = self.train_step(inputs, labels)
-            epoch_loss += loss
+            loss, is_valid = self.train_step(inputs, labels)
+            if is_valid:
+                epoch_loss += loss
+                valid_steps += 1
+            else:
+                skipped_steps += 1
+
+        if skipped_steps > 0:
+            print(f"[WARN] 本 epoch 跳过 {skipped_steps}/{step} 个 batch（非有限 loss）")
 
         self.scheduler.step()
-        return epoch_loss / step
+        # 用有效 step 数做平均；若全部跳过，返回 0 不除零
+        # （默认关闭时 skipped 恒为 0，valid_steps == step，与历史行为逐位一致）
+        return (epoch_loss / valid_steps) if valid_steps > 0 else 0.0
 
     def _get_eval_model(self):
         """获取验证用的模型（原始模型或平均权重模型）"""

@@ -69,6 +69,9 @@ def evaluate(
     patch_size: tuple = (64, 64, 64),
     lesion_wise: bool = True,
     device: str = None,
+    # 可迁移性：路径覆盖（默认空=历史行为不变）
+    cache_parent: str = "",   # 数据缓存父目录覆盖（优先级：命令行 > 环境变量 SRTP_CACHE_PARENT > 各项目默认）
+    data_root: str = "",      # 原始 BraTS TrainingData 目录覆盖（本项目评估仅读缓存，保留参数以对齐跨项目 CLI 口径）
 ):
     """评估入口。
 
@@ -84,6 +87,8 @@ def evaluate(
         patch_size: 推理 patch 尺寸（与滑窗 roi_size 一致）
         lesion_wise: 是否启用 lesion-wise 指标
         device: cuda / cpu
+        cache_parent: 数据缓存父目录覆盖（空=默认 / 环境变量 SRTP_CACHE_PARENT）
+        data_root: 原始数据目录覆盖（本项目评估仅读缓存，保留以对齐跨项目 CLI 口径）
     """
     if not use_disk_cache:
         raise ValueError("LightSegMamba-V3 评估必须启用缓存（--cache）")
@@ -119,7 +124,12 @@ def evaluate(
     }, title="评估配置")
 
     # ── 缓存与划分 ────────────────────────────────────────────────────────
-    current_cache_dir = resolve_cache_dir(resolution, _DEFAULT_CACHE_PARENT, max_samples)
+    # max_samples 必须以关键字传参（新版 shared 签名第 3 位是 cli_parent）：
+    # cli_parent 覆盖父目录，max_samples 追加 _{N} 采样后缀，两者正交工作；
+    # 两者皆空/None 时与历史目录完全一致。
+    # 注意：本项目评估仅读 PersistentDataset 缓存、不直接访问原始数据，
+    # 故无 DATA_DIR 可参数化（data_root 仅为跨项目 CLI 口径对齐保留）。
+    current_cache_dir = resolve_cache_dir(resolution, _DEFAULT_CACHE_PARENT, max_samples=max_samples, cli_parent=cache_parent)
 
     split_file = os.path.join(current_cache_dir, "split_info.json")
     if not os.path.exists(split_file):
@@ -242,6 +252,11 @@ if __name__ == "__main__":
                         help="推理 patch 尺寸（D H W）")
     parser.add_argument("--no-lesion-wise", action="store_true", help="禁用 lesion-wise")
     parser.add_argument("--device", type=str, default=None, help="设备 (cuda/cpu)")
+    # 跨卡包合并的可选开关（默认关闭，行为与历史完全一致）
+    parser.add_argument("--cache_parent", type=str, default="",
+                        help="数据缓存父目录覆盖（优先级：命令行 > 环境变量 SRTP_CACHE_PARENT > 各项目默认；最终目录 = {parent}_{分辨率}）")
+    parser.add_argument("--data_root", type=str, default="",
+                        help="原始 BraTS TrainingData 目录覆盖（优先级：命令行 > 环境变量 BRATS_DATA_ROOT > 默认）")
     args = parser.parse_args()
 
     evaluate(
@@ -255,4 +270,6 @@ if __name__ == "__main__":
         patch_size=tuple(args.patch_size),
         lesion_wise=not args.no_lesion_wise,
         device=args.device,
+        cache_parent=args.cache_parent,
+        data_root=args.data_root,
     )

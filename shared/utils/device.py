@@ -63,8 +63,45 @@ def setup_cuda_optimization():
         torch.backends.cudnn.allow_tf32 = True
 
 
+def setup_determinism(seed: int = 42):
+    """
+    【可复现性】固定全链路随机性，使同卡同 seed 逐次可复现（--deterministic 开启时调用）
+
+    - 固定 python/numpy/torch/cuda 种子
+    - cudnn 关闭自动调优（benchmark 引入非确定性 kernel 选择）
+    - torch 确定性算法（warn_only：个别算子无确定性实现时仅告警不崩溃）
+
+    注意：不触碰 TF32 开关（allow_tf32 维持 setup_cuda_optimization 的设置），
+    保证与论文历史数字口径可比；TF32 的矩阵乘结果在同代卡上逐位一致。
+
+    调用前提：os.environ["CUBLAS_WORKSPACE_CONFIG"]=":4096:8" 必须在任何
+    CUDA 上下文创建之前设置（由各项目 pipeline/train.py 入口负责）。
+
+    Args:
+        seed: 全局随机种子
+
+    Returns:
+        seed 原样返回，便于链式使用
+    """
+    import random
+    import numpy as np
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+    try:
+        torch.use_deterministic_algorithms(True, warn_only=True)
+    except Exception:
+        pass
+    print(f"[Determinism] seed={seed} | cudnn.deterministic=True | benchmark=False | TF32 保持 setup_cuda_optimization 设置不变")
+    return seed
+
+
 __all__ = [
     "get_device",
     "check_gpu_compatibility",
     "setup_cuda_optimization",
+    "setup_determinism",
 ]

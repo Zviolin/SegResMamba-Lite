@@ -39,40 +39,62 @@ def resolve_log_prefix(log_name_arg, default_prefix):
     return log_name_arg if log_name_arg else default_prefix
 
 
-def resolve_cache_parent(default_parent):
+def resolve_cache_parent(default_parent, cli_parent=None):
     """
     解析数据缓存父目录
 
-    优先级：环境变量 SRTP_CACHE_PARENT > default_parent（各项目历史默认）
+    优先级：命令行 --cache_parent > 环境变量 SRTP_CACHE_PARENT > default_parent（各项目历史默认）
 
     注意：本仓库存在两份 persistent_cache_2.0（D:\\ 主项目+5基线体系 与
     Essay\\Data LightSegMamba 体系），两份同为 seed=42 但划分实现不同
     （test 集交集仅 21/188），默认路径与各项目历史划分绑定、不可混用；
-    环境变量仅用于整机迁移（换机器时统一重定向）。
+    命令行参数/环境变量仅用于整机迁移（换机器时统一重定向）。
 
     Args:
         default_parent: 默认缓存父目录（各项目历史值，由调用方传入）
+        cli_parent: 命令行 --cache_parent 的值（空字符串/None 表示未指定）
 
     Returns:
         缓存父目录路径
     """
+    if cli_parent:
+        return os.path.abspath(cli_parent)
     return os.environ.get("SRTP_CACHE_PARENT", default_parent)
 
 
-def resolve_cache_dir(resolution, default_parent, max_samples=None):
+def resolve_data_root(default_data_root, cli_data_root=None):
+    """
+    解析原始 BraTS TrainingData 目录
+
+    优先级：命令行 --data_root > 环境变量 BRATS_DATA_ROOT > default_data_root（历史默认）
+
+    Args:
+        default_data_root: 默认数据目录（历史硬编码值，由调用方传入）
+        cli_data_root: 命令行 --data_root 的值（空字符串/None 表示未指定）
+
+    Returns:
+        数据目录路径
+    """
+    if cli_data_root:
+        return os.path.abspath(cli_data_root)
+    return os.environ.get("BRATS_DATA_ROOT", default_data_root)
+
+
+def resolve_cache_dir(resolution, default_parent, cli_parent=None, max_samples=None):
     """
     解析数据缓存目录（统一拼接规则：{父目录}_{分辨率}[_{采样数}]）
 
     Args:
         resolution: 数据分辨率（如 2.0）
         default_parent: 默认缓存父目录（各项目历史值，由调用方传入）
+        cli_parent: 命令行 --cache_parent 的值（空字符串/None 表示未指定）
         max_samples: LightSegMamba 特有；小于 1251 时目录名追加 _{max_samples}
             （如 persistent_cache_2.0_200），None 或 >=1251 为全量目录
 
     Returns:
         缓存目录路径，形如 {parent}_{resolution} 或 {parent}_{resolution}_{max_samples}
     """
-    parent = resolve_cache_parent(default_parent)
+    parent = resolve_cache_parent(default_parent, cli_parent)
     if max_samples is not None and max_samples < 1251:
         return f"{parent}_{resolution}_{max_samples}"
     return f"{parent}_{resolution}"

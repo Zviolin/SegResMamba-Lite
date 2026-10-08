@@ -17,7 +17,7 @@ sys.path.insert(0, _code_root)
 
 from shared.data.dataloader import get_train_dataloader, get_val_dataloader, auto_roi_size_from_cache
 from shared.utils.logger import setup_logger
-from shared.utils.device import setup_cuda_optimization
+from shared.utils.device import setup_cuda_optimization, setup_determinism
 from shared.utils.device_info import print_device_info
 from shared.utils.paths import resolve_log_prefix, resolve_model_dir, resolve_cache_dir
 
@@ -32,6 +32,7 @@ def train(
     model_name="vss_unet",     # 模型名称 (segresnet/vss_unet/vm_unet)
     version_name="vss_unet",    # 版本名称（内部使用）
     resolution=1.0,             # 数据分辨率 (1.0/2.0/3.0/4.0 mm)
+    seed=42,                    # 训练随机种子（不影响数据划分缓存；--deterministic 时生效）
     # ═══════════════════════════════════════════════════════════════════════
     # 训练参数
     # ═══════════════════════════════════════════════════════════════════════
@@ -39,6 +40,8 @@ def train(
     batch_size=None,            # 批次大小，None 表示自动计算
     use_disk_cache=False,        # 是否使用数据缓存
     use_swa=False,              # 是否启用权重滑动平均（SWA 等权）
+    skip_nonfinite=False,       # 跳过非有限 loss（NaN/Inf）的 batch，防污染 optimizer/平均权重（默认关闭，保持历史行为）
+    best_weights="raw",         # best_metric_model.pth 保存来源：raw=原始模型权重（历史口径）/ avg=验证所用的平均权重（SWA）
     max_epochs=100,              # 训练轮数
     val_interval=5,             # 验证间隔 (每N个epoch验证一次)
     # ═══════════════════════════════════════════════════════════════════════
@@ -47,6 +50,8 @@ def train(
     device=None,                 # 设备类型 (cuda/cpu)
     model_dir="",                # 自定义权重保存目录（空=默认 pipeline/models/{分辨率}mm_{设备}）
     log_name="",                 # 自定义日志名称前缀（空=默认 train_{版本}_{分辨率}mm）
+    deterministic=False,         # 可复现性：开启确定性训练（cudnn.deterministic + 确定性算法，不触碰 TF32）
+    cache_parent="",             # 数据缓存父目录覆盖（优先级：命令行 > 环境变量 SRTP_CACHE_PARENT > 各项目默认）
 ):
     """
     训练入口
@@ -55,14 +60,23 @@ def train(
         model_name: 模型名称
         version_name: 版本名称（内部使用）
         resolution: 数据分辨率
+        seed: 训练随机种子（--deterministic 时生效）
         num_workers: 数据加载线程数
         batch_size: 批次大小
         use_disk_cache: 是否使用数据缓存
         use_swa: 是否启用权重滑动平均（SWA）
+        skip_nonfinite: 是否跳过非有限 loss（NaN/Inf）的 batch
+        best_weights: best_metric_model.pth 保存来源 (raw/avg)
         max_epochs: 训练轮数
         val_interval: 验证间隔
         device: 设备类型 (cuda/cpu)
+        deterministic: 是否开启确定性训练（不触碰 TF32）
+        cache_parent: 数据缓存父目录覆盖（空=使用默认/环境变量）
     """
+    # 可复现性：cuBLAS 确定性工作区配置必须在任何 CUDA 上下文创建之前设置
+    if deterministic:
+        os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+
     # ─────────────────────────────────────────────────────────────────────
     # 日志配置
     # ─────────────────────────────────────────────────────────────────────
@@ -78,6 +92,10 @@ def train(
     # CUDA 优化
     # ─────────────────────────────────────────────────────────────────────
     setup_cuda_optimization()
+
+    if deterministic:
+        # 可复现性：关 benchmark + 锁定确定性算法（不触碰 TF32，保持论文口径可比）
+        setup_determinism(seed)
 
     # ─────────────────────────────────────────────────────────────────────
     # 设备配置
@@ -116,7 +134,7 @@ def train(
         },
     }, title="训练配置")
 
-    current_cache_dir = resolve_cache_dir(resolution, CACHE_DIR) if use_disk_cache else None
+    current_cache_dir = resolve_cache_dir(resolution, CACHE_DIR, cli_parent=cache_parent) if use_disk_cache else None
     pixdim = (resolution, resolution, resolution)
 
     if use_disk_cache and current_cache_dir:
@@ -179,6 +197,7 @@ def train(
         scheduler_type="CosineAnnealingLR",
         max_epochs=max_epochs,
         use_swa=use_swa,
+        skip_nonfinite=skip_nonfinite,
     )
 
     MODEL_DIR = resolve_model_dir(
@@ -255,8 +274,14 @@ def train(
                     if metrics["dice_wt"] > best_metric:
                         best_metric = metrics["dice_wt"]
                         best_metric_epoch = epoch + 1
-                        torch.save(model.state_dict(), os.path.join(MODEL_DIR, "best_metric_model.pth"))
-                        print(f"新的最佳 WT Dice: {best_metric:.4f}")
+                        # --best_weights avg：保存验证所用的平均权重（SWA，trainer.swa.averaged_model）；
+                        # raw（默认，历史口径）：保存原始模型权重
+                        if best_weights == "avg" and trainer.swa is not None:
+                            torch.save(trainer.swa.averaged_model.state_dict(), os.path.join(MODEL_DIR, "best_metric_model.pth"))
+                            print(f"新的最佳 WT Dice: {best_metric:.4f} (来源: 平均权重)")
+                        else:
+                            torch.save(model.state_dict(), os.path.join(MODEL_DIR, "best_metric_model.pth"))
+                            print(f"新的最佳 WT Dice: {best_metric:.4f}")
 
                     # 更新最后验证的 epoch
                     last_validated_epoch = epoch + 1
@@ -307,6 +332,16 @@ if __name__ == "__main__":
                         help="自定义权重保存目录（优先级高于默认规则；默认 pipeline/models/{分辨率}mm_{设备}）")
     parser.add_argument("--log_name", type=str, default="",
                         help="自定义日志名称前缀（默认 train_{版本}_{分辨率}mm）")
+    # 跨卡包合并的可选开关（默认关闭，行为与历史完全一致）
+    parser.add_argument("--seed", type=int, default=42, help="训练随机种子（不影响数据划分缓存）")
+    parser.add_argument("--deterministic", action="store_true", default=False,
+                        help="开启确定性训练：cudnn.deterministic + 确定性算法 + CUBLAS_WORKSPACE_CONFIG（不触碰 TF32）")
+    parser.add_argument("--cache_parent", type=str, default="",
+                        help="数据缓存父目录覆盖（优先级：命令行 > 环境变量 SRTP_CACHE_PARENT > 各项目默认；最终目录 = {parent}_{分辨率}）")
+    parser.add_argument("--skip_nonfinite", action="store_true", default=False,
+                        help="跳过非有限 loss（NaN/Inf）的 batch，不 backward/不更新/不进平均权重")
+    parser.add_argument("--best_weights", type=str, default="raw", choices=["raw", "avg"],
+                        help="best_metric_model.pth 保存来源：raw=原始权重（默认，历史口径）/ avg=验证所用的平均权重（SWA，跟随 --swa）")
     args = parser.parse_args()
     
     # 解析 num_workers 参数
@@ -333,13 +368,18 @@ if __name__ == "__main__":
         model_name=args.model,
         version_name="vss_unet",
         resolution=args.resolution,
+        seed=args.seed,
         num_workers=workers_arg,
         batch_size=batch_arg,
         use_disk_cache=args.cache,
         use_swa=args.swa,
+        skip_nonfinite=args.skip_nonfinite,
+        best_weights=args.best_weights,
         max_epochs=args.epochs,
         val_interval=args.val_interval,
         device=args.device,
         model_dir=args.model_dir,
         log_name=args.log_name,
+        deterministic=args.deterministic,
+        cache_parent=args.cache_parent,
     )

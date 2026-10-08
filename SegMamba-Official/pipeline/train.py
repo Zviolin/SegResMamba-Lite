@@ -19,7 +19,7 @@ sys.path.insert(0, _code_root)
 
 from shared.data.dataloader import get_train_dataloader, get_val_dataloader, auto_roi_size_from_cache
 from shared.utils.logger import setup_logger
-from shared.utils.device import setup_cuda_optimization
+from shared.utils.device import setup_cuda_optimization, setup_determinism
 from shared.utils.device_info import print_device_info
 from shared.utils.paths import resolve_log_prefix, resolve_model_dir, resolve_cache_dir
 
@@ -41,17 +41,30 @@ def train(
     device=None,
     model_dir="",                # 自定义权重保存目录（空=默认 pipeline/models/{分辨率}mm_{设备}）
     log_name="",                 # 自定义日志名称前缀（空=默认 train_{版本}_{分辨率}mm）
+    seed=42,                        # 训练随机种子（不影响数据划分缓存）
+    deterministic=False,            # 可复现性：开启确定性训练（cudnn.deterministic + 确定性算法，不触碰 TF32）
+    cache_parent="",                # 数据缓存父目录覆盖（优先级：命令行 > 环境变量 SRTP_CACHE_PARENT > 各项目默认）
+    skip_nonfinite=False,           # 跳过非有限 loss（NaN/Inf）的 batch，防污染 optimizer/平均权重（默认关闭，保持历史行为）
+    best_weights="raw",             # best_metric_model.pth 保存来源：raw=原始模型权重（历史口径）/ avg=验证所用的平均权重（SWA）
 ):
     """
     SegMamba官方训练流程
     按照官方配置: SGD, lr=1e-2, batch_size=2, max_epochs=1000
     """
+    # 可复现性：cuBLAS 确定性工作区配置必须在任何 CUDA 上下文创建之前设置
+    if deterministic:
+        os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+
     LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
     logger = setup_logger(LOG_DIR, resolve_log_prefix(log_name, f"train_{version_name}_{resolution}mm"))
-    
+
     print_device_info(logger)
     setup_cuda_optimization()
-    
+
+    if deterministic:
+        # 可复现性：关 benchmark + 锁定确定性算法（不触碰 TF32，保持论文口径可比）
+        setup_determinism(seed)
+
     DEVICE = device if device else ("cuda" if torch.cuda.is_available() else "cpu")
     
     # 官方SegMamba配置
@@ -91,7 +104,7 @@ def train(
         },
     }, title="训练配置 - OFFICIAL SegMamba")
     
-    current_cache_dir = resolve_cache_dir(resolution, CACHE_DIR) if use_disk_cache else None
+    current_cache_dir = resolve_cache_dir(resolution, CACHE_DIR, cli_parent=cache_parent) if use_disk_cache else None
     pixdim = (resolution, resolution, resolution)
     
     if use_disk_cache and current_cache_dir:
@@ -155,6 +168,7 @@ def train(
         max_epochs=max_epochs,
         use_swa=use_swa,
         use_deep_supervision=use_deep_supervision,
+        skip_nonfinite=skip_nonfinite,
     )
     
     # 配置官方优化器
@@ -239,7 +253,15 @@ def train(
                 if metrics["dice_wt"] > best_metric:
                     best_metric = metrics["dice_wt"]
                     best_metric_epoch = epoch + 1
-                    torch.save(model.state_dict(), os.path.join(MODEL_DIR, "best_metric_model.pth"))
+                    # --best_weights avg：保存验证所用的平均权重（SWA，验证经 _get_eval_model 实际使用）；
+                    # raw（默认，历史口径）：保存原始模型权重
+                    if best_weights == "avg" and trainer.swa is not None:
+                        torch.save(
+                            trainer._get_eval_model().state_dict(),
+                            os.path.join(MODEL_DIR, "best_metric_model.pth")
+                        )
+                    else:
+                        torch.save(model.state_dict(), os.path.join(MODEL_DIR, "best_metric_model.pth"))
                     if trainer.swa is not None:
                         torch.save(
                             trainer.swa.get_state_dict(),
@@ -288,6 +310,16 @@ if __name__ == "__main__":
                         help="自定义权重保存目录（优先级高于默认规则；默认 pipeline/models/{分辨率}mm_{设备}）")
     parser.add_argument("--log_name", type=str, default="",
                         help="自定义日志名称前缀（默认 train_{版本}_{分辨率}mm）")
+    parser.add_argument("--seed", type=int, default=42, help="训练随机种子（不影响数据划分缓存）")
+    # 跨卡包合并的可选开关（默认关闭，行为与历史完全一致）
+    parser.add_argument("--deterministic", action="store_true", default=False,
+                        help="开启确定性训练：cudnn.deterministic + 确定性算法 + CUBLAS_WORKSPACE_CONFIG（不触碰 TF32）")
+    parser.add_argument("--cache_parent", type=str, default="",
+                        help="数据缓存父目录覆盖（优先级：命令行 > 环境变量 SRTP_CACHE_PARENT > 各项目默认；最终目录 = {parent}_{分辨率}）")
+    parser.add_argument("--skip_nonfinite", action="store_true", default=False,
+                        help="跳过非有限 loss（NaN/Inf）的 batch，不 backward/不更新/不进平均权重")
+    parser.add_argument("--best_weights", type=str, default="raw", choices=["raw", "avg"],
+                        help="best_metric_model.pth 保存来源：raw=原始权重（默认，历史口径）/ avg=验证所用的平均权重（SWA）")
     args = parser.parse_args()
     
     # 解析 num_workers 参数
@@ -323,5 +355,10 @@ if __name__ == "__main__":
         device=args.device,
         model_dir=args.model_dir,
         log_name=args.log_name,
+        seed=args.seed,
+        deterministic=args.deterministic,
+        cache_parent=args.cache_parent,
+        skip_nonfinite=args.skip_nonfinite,
+        best_weights=args.best_weights,
     )
 

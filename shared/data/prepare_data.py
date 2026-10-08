@@ -22,7 +22,7 @@ if project_root not in sys.path:
 
 from shared.data.dataloader import get_data_list, get_train_pre_transforms
 from shared.utils.device_info import print_device_info
-from shared.utils.paths import resolve_cache_dir
+from shared.utils.paths import resolve_cache_dir, resolve_data_root
 
 
 def prepare_data(
@@ -31,6 +31,8 @@ def prepare_data(
     # ═══════════════════════════════════════════════════════════════════════
     resolution=1.0,             # 数据分辨率 (1.0/2.0/3.0/4.0 mm)
     cache_dir=None,            # 缓存目录路径
+    data_root=None,            # 原始 BraTS TrainingData 目录覆盖（优先级：参数 > 环境变量 BRATS_DATA_ROOT > 历史默认）
+    cache_parent=None,         # 缓存父目录覆盖（优先级：参数 > 环境变量 SRTP_CACHE_PARENT > 历史默认；最终目录 = {parent}_{分辨率}）
     max_samples=None,          # 最大样本数 (None=全部)
     seed=42,                  # 随机种子
     dtype="float16",           # 数据类型: float16 或 float32
@@ -63,7 +65,11 @@ def prepare_data(
         num_workers: 数据加载线程数
         generate_cache_flag: 是否生成缓存
     """
-    DATA_DIR = r"g:\Codes\Python\SRTP\Essay\Data\Brain\TCIA-BraTS\DATA\BraTS2023\BraTS-GLI\TrainingData\ASNR-MICCAI-BraTS2023-GLI-Challenge-TrainingData"
+    # 可迁移性：数据目录解析优先级 函数参数 > 环境变量 BRATS_DATA_ROOT > 历史默认
+    DATA_DIR = resolve_data_root(
+        r"g:\Codes\Python\SRTP\Essay\Data\Brain\TCIA-BraTS\DATA\BraTS2023\BraTS-GLI\TrainingData\ASNR-MICCAI-BraTS2023-GLI-Challenge-TrainingData",
+        data_root,
+    )
     CACHE_DIR = r"D:\Codes\SRTP\BraTS\DATA\BraTS-GLI\TrainingDATA\persistent_cache"
 
     assert abs(train_ratio + val_ratio + test_ratio - 1.0) < 1e-6, "比例之和必须为1"
@@ -132,7 +138,7 @@ def prepare_data(
     print(f"验证样本数: {len(val_files)}")
     print(f"测试样本数: {len(test_files)}")
 
-    current_cache_dir = resolve_cache_dir(resolution, CACHE_DIR) if generate_cache_flag else None
+    current_cache_dir = resolve_cache_dir(resolution, CACHE_DIR, cli_parent=cache_parent) if generate_cache_flag else None
     if current_cache_dir:
         print(f"\n缓存目录: {current_cache_dir}")
 
@@ -289,6 +295,11 @@ if __name__ == "__main__":
     parser.add_argument("--samples", type=int, default=None, help="最大使用的样本数")
     parser.add_argument("--dtype", type=str, default="float16", choices=["float16", "float32"], help="缓存数据类型")
     parser.add_argument("--cache-format", type=str, default="numpy", choices=["numpy", "tensor"], help="缓存格式")
+    # 跨卡包合并的可选开关（默认关闭，行为与历史完全一致）
+    parser.add_argument("--data_root", type=str, default="",
+                        help="原始 BraTS TrainingData 目录覆盖（优先级：命令行 > 环境变量 BRATS_DATA_ROOT > 默认）")
+    parser.add_argument("--cache_parent", type=str, default="",
+                        help="缓存父目录覆盖（优先级：命令行 > 环境变量 SRTP_CACHE_PARENT > 默认；最终目录 = {parent}_{分辨率}）")
     args = parser.parse_args()
 
     resolution = args.resolution
@@ -311,9 +322,12 @@ if __name__ == "__main__":
     dtype = args.dtype
     cache_format = args.cache_format
 
-    DATA_DIR = r"g:\Codes\Python\SRTP\Essay\Data\Brain\TCIA-BraTS\DATA\BraTS2023\BraTS-GLI\TrainingData\ASNR-MICCAI-BraTS2023-GLI-Challenge-TrainingData"
+    DATA_DIR = resolve_data_root(
+        r"g:\Codes\Python\SRTP\Essay\Data\Brain\TCIA-BraTS\DATA\BraTS2023\BraTS-GLI\TrainingData\ASNR-MICCAI-BraTS2023-GLI-Challenge-TrainingData",
+        args.data_root,
+    )
     CACHE_DIR = r"D:\Codes\SRTP\BraTS\DATA\BraTS-GLI\TrainingDATA\persistent_cache"
-    cache_dir = resolve_cache_dir(resolution, CACHE_DIR) if enable_cache else None  # 修正：正确的目录路径
+    cache_dir = resolve_cache_dir(resolution, CACHE_DIR, cli_parent=args.cache_parent) if enable_cache else None  # 修正：正确的目录路径
     current_cache_dir = cache_dir  # 保持变量名一致性
 
     import logging
@@ -353,6 +367,8 @@ if __name__ == "__main__":
     prepare_data(
         resolution=resolution,
         cache_dir=cache_dir,
+        data_root=args.data_root,
+        cache_parent=args.cache_parent,
         generate_cache_flag=enable_cache,  # 修正：使用 enable_cache
         train_ratio=train_ratio,
         val_ratio=val_ratio,
