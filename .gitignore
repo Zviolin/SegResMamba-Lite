@@ -1,0 +1,26 @@
+# ==========================================
+# Git Ignore - SegResMamba-Lite (Main Branch)
+# ==========================================
+# Main 分支仅含 README.md，作为仓库门面。
+# 保持最小化的 ignore，防止后续误提交临时文件。
+
+# 系统文件
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 临时文件
+*.bak
+*.tmp
+
+# 凭据
+.env
+.env.local
+*.secret
