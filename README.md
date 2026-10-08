@@ -4,9 +4,9 @@
 
 ## 📋 项目概述
 
-本目录是 `SegResMamba-Lite` 项目的 **Android 移动应用配套**分支（`android` 分支）。
+本目录是 `SegResMamba-Lite` 项目的 **Android 移动应用配套**分支（`App` 分支）。
 
-基于 V6/V8 MoA 模型，提供：
+基于 V10（最终模型，论文级 token 级稀疏 MoA，1.42M 参数），提供：
 - 📱 移动端 MRI 查看
 - 🎯 离线肿瘤分割（ONNX Runtime）
 - 📊 3D 分割可视化
@@ -15,7 +15,7 @@
 ## 🏗️ 项目结构
 
 ```
-Android/
+APP/
 ├── app/                         # 主应用模块
 │ ├── src/main/
 │ │ ├── java/com/zviolin/segresmamba/
@@ -53,7 +53,7 @@ Android/
 
 ```bash
 # 克隆分支
-git clone -b android https://github.com/Zviolin/SegResMamba-Lite.git
+git clone -b App https://github.com/Zviolin/SegResMamba-Lite.git
 
 # 用 Android Studio 打开项目根目录
 
@@ -78,21 +78,21 @@ git clone -b android https://github.com/Zviolin/SegResMamba-Lite.git
 | 依赖注入 | Hilt |
 | 构建 | Gradle 8.x |
 
-## 📦 模型转换（V6 → ONNX）
+## 📦 模型转换（V10 → ONNX）
 
 ```python
 # 在 experiments 分支执行
 import torch
 from models import get_model
 
-model = get_model(version='v6', init_filters=20)
+model = get_model(version='v10', init_filters=20)
 model.load_state_dict(torch.load('best_metric_model.pth'))
 model.eval()
 
 # 导出 ONNX
 dummy = torch.randn(1, 4, 64, 64, 64)
 torch.onnx.export(
-    model, dummy, 'v6_2.0mm.onnx',
+    model, dummy, 'v10_2.0mm.onnx',
     input_names=['input'],
     output_names=['output'],
     dynamic_axes={'input': {0: 'batch'},
@@ -100,7 +100,7 @@ torch.onnx.export(
 )
 ```
 
-将 `v6_2.0mm.onnx` 放入 `app/src/main/assets/`。
+将 `v10_2.0mm.onnx` 放入 `app/src/main/assets/`。
 
 ## 📱 核心功能
 
@@ -141,13 +141,14 @@ class ViewerFragment : Fragment() {
 }
 ```
 
-## 📊 V6 vs V8 模型选择
+## 📊 模型选择（V10 为最终模型）
 
 | 场景 | 推荐版本 | 理由 |
 |------|---------|------|
-| **移动端（生产）** | **V6 + ONNX** | 体积小、稳定、Dice 0.89 |
-| **学术 Demo** | V8 + ONNX | α 自由自适应创新 |
-| **超轻量场景** | V2 + ONNX | 1.42M 极小 |
+| **移动端（生产）** | **V10 + ONNX** | 最终模型（token 级稀疏 MoA），1.42M，LW Dice 0.8304 全系列最高 |
+| **稳定备选** | V6 + ONNX | Soft MoA，全局 Dice 0.8904，权重留存完整 |
+
+> 注：V8 权重未留存，无法部署；完整版本对比见 experiments 分支 `SegResMamba-Lite/论文实验章节.md`（官方 374mm 满罚口径）。
 
 ## 🧪 测试用例
 
@@ -161,8 +162,8 @@ class ViewerFragment : Fragment() {
 
 ## 📚 关联项目
 
-- 模型代码：[experiments 分支](../experiments)
-- Web 应用：[webapp 分支](../webapp)
+- 模型代码：[experiments 分支](https://github.com/Zviolin/SegResMamba-Lite/tree/experiments)
+- Web 应用：[webapp 分支](https://github.com/Zviolin/SegResMamba-Lite/tree/webapp)
 
 ---
 

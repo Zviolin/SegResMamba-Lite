@@ -1,0 +1,86 @@
+# ==========================================
+# Git Ignore - SegResMamba-Lite (Android Branch)
+# ==========================================
+# Android (Gradle + Kotlin) 项目忽略规则
+
+# ----- Android Studio / IDEA -----
+.gradle/
+.idea/
+*.iml
+.kotlin/
+captures/
+.externalNativeBuild/
+.cxx/
+local.properties
+*.apk
+*.aab
+*.aar
+*.ap_
+*.dex
+*.class
+
+# 输出文件
+bin/
+gen/
+out/
+release/
+debug/
+app/build/
+**/build/
+
+# 密钥 / Keystore
+*.jks
+*.keystore
+release.keystore
+google-services.json
+
+# ----- 模型权重（与主仓一致） -----
+*.pth
+*.pt
+*.onnx
+*.tflite
+*.pb
+*.bin
+*.h5
+*.hdf5
+
+# ----- Python 工具脚本（项目内 Python 推理相关） -----
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+*.tmp
+*.bak
+
+# ----- 资源 / 数据 -----
+assets/models/*.onnx
+assets/models/*.tflite
+*.nii.gz
+*.nii
+*.mhd
+*.mha
+
+# ----- 系统 / IDE 临时 -----
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*~
+
+# ----- 凭据 -----
+.env
+.env.local
+*.secret
+keystore.properties
+
+# ----- 测试报告 -----
+test-results/
+build/reports/
+**/test-results/
+**/reports/
+
+# ----- 日志 -----
+*.log
+logs/
