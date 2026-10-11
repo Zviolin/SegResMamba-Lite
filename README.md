@@ -13,7 +13,6 @@ SegResMamba-Lite 是基于 Mamba 架构的脑肿瘤分割模型集合（V1–V12
 | **`main`** | **项目主分支（默认）** | **本目录（仅 README）** | `Main/` |
 | `experiments` | 完整实验源码 | V1–V12 全部代码 + 4 基线 + shared 共享库 | `Code/` |
 | `webapp` | Web 应用 | 前后端 Docker 网页项目 | `WebAPP/` |
-| `App` | Android 应用 | Gradle + Kotlin Android App | `APP/` |
 
 ## 🎯 快速开始（experiments 分支）
 
@@ -67,10 +66,7 @@ Zviolin/SegResMamba-Lite
 │ ├── LightSegMamba-DiceCE-AdamW-V3/   # 轻量 Mamba 探索（1.27M）
 │ └── shared/             # 共享工具（data/models/metrics/losses/optim/inference/utils）
 │
-├── webapp 分支（WebAPP/ 目录）
-│ └── README.md（占位，待开发）
-│
-└── App 分支（APP/ 目录）
+└── webapp 分支（webapp/ 目录）
  └── README.md（占位，待开发）
 ```
 
