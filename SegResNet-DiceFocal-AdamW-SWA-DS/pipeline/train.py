@@ -173,7 +173,8 @@ def train(
 
     print(f"训练样本数: {len(train_loader.dataset)}, 验证样本数: {len(val_loader.dataset)}")
 
-    model = get_model(model_name, device=DEVICE)
+    # 深层监督开关必须传入模型构建：否则 SegResNetDS 分支不可达，--ds 仅影响 loss 侧而模型侧仍输出单张量
+    model = get_model(model_name, device=DEVICE, use_deep_supervision=use_deep_supervision)
 
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)

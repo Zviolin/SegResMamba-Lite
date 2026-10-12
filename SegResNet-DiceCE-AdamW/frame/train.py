@@ -335,10 +335,10 @@ class BaselineTrainer:
                 ldt_sum, lht_sum, ldt_gt, ldt_fp = lesionwise_evaluation(pt, tt, spacing)
                 lde_sum, lhe_sum, lde_gt, lde_fp = lesionwise_evaluation(pe, te, spacing)
 
-                # 按照官方公式计算 lesion-wise 指标
-                # lesion_wise_dice = sum(dice) / (num_gt_lesions + num_fp)
-                # lesion_wise_hd95 = sum(hd) / num_gt_lesions
-                # 注意：FP 惩罚只应用于 Dice，HD95 不需要额外惩罚（表面距离已自然惩罚 FP）
+                # 本项目口径（2026-10-05 定案；非 BraTS 2023 官方 HD95 公式，引用需注明）：
+                # lesion_wise_dice = sum(dice) / (num_gt_lesions + num_fp)（与官方一致）
+                # lesion_wise_hd95 = sum(hd) / num_gt_lesions（FN 病灶的 374 罚已在 hd_sum 内；
+                #   官方口径分母还应含 FP，本项目为 FP 罚只作用于 Dice——各版本统一采用本口径）
                 
                 if ldw_gt + ldw_fp > 0:
                     ldw = ldw_sum / (ldw_gt + ldw_fp)

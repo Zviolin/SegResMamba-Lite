@@ -329,11 +329,15 @@ class UltraLightTrainer:
                 ldt_sum, lht_sum, ldt_gt, ldt_fp = lesionwise_evaluation(pt, tt, spacing)
                 lde_sum, lhe_sum, lde_gt, lde_fp = lesionwise_evaluation(pe, te, spacing)
 
-                # 按照 BraTS 2023 官方公式计算 lesion-wise 指标
-                # lesion_wise_dice = sum(dice) / (num_gt_lesions + num_fp)
+                # ⚠️ 本版本口径标注（2026-10-12 代码审查补充，行为冻结不改）：
+                # 本版本 lesion HD95 采用 (sum(hd) + num_fp × 374) / (num_gt + num_fp)，
+                # 与其余全部版本（lhw_sum / num_gt，HD95 分母不含 FP）不同，且与 BraTS 2023
+                # 官方口径（FN 病灶贡献 374 进分子、分母含 FP）亦有差异——本式把"FP 个数×374"
+                # 追加进分子，而 lesionwise_evaluation 已对未匹配 GT（FN）病灶计 374 罚，
+                # 存在双重放大。最终实验汇报 3.3 中 VMUNet LW HD95=33.01 即本公式产物，
+                # 与其他版本的 LW HD95 不可直接比较；引用时必须注明口径差异。
+                # lesion_wise_dice = sum(dice) / (num_gt_lesions + num_fp)（此项与官方一致）
                 # lesion_wise_hd95 = (sum(hd) + num_fp * 374) / (num_gt_lesions + num_fp)
-                # 注意：lesionwise_evaluation 函数中已经对未匹配的 GT 病灶给了 374 的 HD95 惩罚
-                # 所以这里只需要按照官方公式汇总即可
                 
                 if ldw_gt + ldw_fp > 0:
                     ldw = ldw_sum / (ldw_gt + ldw_fp)

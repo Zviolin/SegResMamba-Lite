@@ -1,11 +1,12 @@
 """
-病灶评估结果汇总（BraTS 2023 官方标准）
+病灶评估结果汇总（本项目口径，2026-10-05 定案；引用时需注明口径）
 从 CSV 文件读取并汇总病灶级别的评估结果
 
-按照 BraTS 2023 官方标准：
-- 对每个病例计算：lesion_dice = sum(dice) / (num_gt_lesions + num_fp)
+本项目口径（与 BraTS 2023 官方公式的差异见下）：
+- 对每个病例计算：lesion_dice = sum(dice) / (num_gt_lesions + num_fp)（与官方一致）
 - 对每个病例计算：lesion_hd95 = sum(hd) / num_gt_lesions
-- 注意：FP 惩罚只应用于 Dice；HD95 分母仅为 GT 病灶数（表面距离已自然体现 FP 的距离惩罚）
+  （FN 病灶的 374 mm 满罚已在 hd_sum 内；官方口径分母还应含 FP——本项目为
+   FP 惩罚只作用于 Dice，HD95 分母仅为 GT 病灶数，各模型版本统一采用本口径）
 - 全局汇总：对所有病例的 lesion-wise 分数取算术平均
 
 参数说明：
@@ -17,7 +18,7 @@ import numpy as np
 
 def aggregate_lesion_results(lesion_results_file):
     """
-    从 CSV 文件读取 lesion-wise 结果并汇总（BraTS 2023 官方标准）
+    从 CSV 文件读取 lesion-wise 结果并汇总（本项目口径，2026-10-05 定案）
 
     CSV 文件格式：
     case_id,dice_wt,dice_tc,dice_et,hd95_wt,hd95_tc,hd95_et,gt_wt,fp_wt,gt_tc,fp_tc,gt_et,fp_et
@@ -34,8 +35,7 @@ def aggregate_lesion_results(lesion_results_file):
             - lw_hd95_tc: Tumor Core lesion-wise HD95
             - lw_hd95_et: Enhancing Tumor lesion-wise HD95
     """
-    # 按照 BraTS 2023 官方标准，全局 lesion-wise 指标应该是：
-    # 对所有病例的 lesion-wise 分数取算术平均
+    # 本项目口径：全局 lesion-wise 指标 = 对所有病例的 lesion-wise 分数取算术平均
     # 每个病例的分数已经是：sum(dice) / (num_gt + num_fp)
     # 所以全局分数 = mean(case_lesion_dice for all cases)
     
@@ -57,8 +57,7 @@ def aggregate_lesion_results(lesion_results_file):
                 hd95_tc_sum += float(parts[5])
                 hd95_et_sum += float(parts[6])
     
-    # 全局 lesion-wise 分数 = 所有病例分数的算术平均
-    # 这符合 BraTS 2023 官方标准
+    # 全局 lesion-wise 分数 = 所有病例分数的算术平均（口径定案见文件头说明）
     return {
         "lw_dice_wt": float(dice_wt_sum / case_count) if case_count > 0 else 0.0,
         "lw_dice_tc": float(dice_tc_sum / case_count) if case_count > 0 else 0.0,

@@ -45,7 +45,6 @@ from shared.utils.device import setup_cuda_optimization
 from shared.utils.device_info import print_device_info
 from shared.utils.logger import setup_logger
 from shared.utils.paths import resolve_cache_dir
-from shared.metrics import lesionwise_evaluation
 from shared.inference.sliding_window import sliding_window_inference
 from shared.inference.postprocess import brats_label_mapping
 from monai.metrics import DiceMetric as MonaiDiceMetric, HausdorffDistanceMetric as MonaiHD95Metric

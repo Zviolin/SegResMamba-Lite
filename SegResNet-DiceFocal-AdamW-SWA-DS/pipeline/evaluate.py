@@ -21,7 +21,6 @@ from shared.utils.checkpoint import load_checkpoint
 from shared.utils.device import setup_cuda_optimization
 from shared.utils.device_info import print_device_info
 from shared.utils.logger import setup_logger
-from shared.metrics.lesion_metric import lesionwise_evaluation
 
 from models import get_model
 from frame.train import OptimizedTrainer
@@ -45,6 +44,7 @@ def evaluate(
     num_workers=None,              # 数据加载线程数，None 表示自动计算
     use_disk_cache=False,        # 是否使用数据缓存
     lesion_wise=True,            # 是否启用 lesion-wise 指标
+    use_deep_supervision=False,  # 是否构建深监督模型（需与训练时 --ds 一致，否则 state_dict 不匹配）
     # ═══════════════════════════════════════════════════════════════════════
     # 设备参数
     # ═══════════════════════════════════════════════════════════════════════
@@ -151,7 +151,8 @@ def evaluate(
         cache_dir=test_cache_dir,
     )
 
-    model = get_model(model_name, device=DEVICE)
+    # 需与训练时一致：深监督权重为 SegResNetDS 结构，普通 SegResNet 无法加载其 state_dict
+    model = get_model(model_name, device=DEVICE, use_deep_supervision=use_deep_supervision)
 
     if checkpoint_path:
         print(f"加载检查点: {checkpoint_path}")
@@ -193,7 +194,7 @@ def evaluate(
 
     if lesion_wise:
         with open(lesion_results_file, "w") as f:
-            f.write("CaseID,LW_Dice_WT,LW_Dice_TC,LW_Dice_ET,LW_HD95_WT,LW_HD95_TC,LW_HD95_ET\n")
+            f.write("CaseID,LW_Dice_WT,LW_Dice_TC,LW_Dice_ET,LW_HD95_WT,LW_HD95_TC,LW_HD95_ET,GT_WT,FP_WT,GT_TC,FP_TC,GT_ET,FP_ET\n")
 
     print("-" * 60)
     logger.print_section("开始评估")
@@ -221,7 +222,6 @@ def evaluate(
         print("-" * 40)
 
     if runs > 1:
-        import numpy as np
         dice_wt_mean = np.mean([m['dice_wt'] for m in all_metrics])
         dice_wt_std = np.std([m['dice_wt'] for m in all_metrics])
         dice_tc_mean = np.mean([m['dice_tc'] for m in all_metrics])
@@ -278,6 +278,7 @@ if __name__ == "__main__":
     parser.add_argument("--cache", action="store_true", help="启用硬盘缓存")
     parser.add_argument("--device", type=str, default=None, help="设备 (cuda/cpu)")
     parser.add_argument("--no_lesion_wise", action="store_true", help="禁用 lesion-wise 指标")
+    parser.add_argument("--ds", action="store_true", help="构建深监督模型（需与训练时 --ds 一致）")
     parser.add_argument("--runs", type=int, default=1, help="评估次数 (>1 时取平均)")
     # 跨卡包合并的可选开关（默认关闭，行为与历史完全一致）
     parser.add_argument("--cache_parent", type=str, default="",
@@ -304,6 +305,7 @@ if __name__ == "__main__":
         num_workers=workers_arg,
         use_disk_cache=args.cache,
         lesion_wise=not args.no_lesion_wise,
+        use_deep_supervision=args.ds,
         runs=args.runs,
         device=args.device,
         cache_parent=args.cache_parent,

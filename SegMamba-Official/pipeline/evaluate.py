@@ -22,7 +22,6 @@ from shared.utils.checkpoint import load_checkpoint
 from shared.utils.device import setup_cuda_optimization
 from shared.utils.device_info import print_device_info
 from shared.utils.logger import setup_logger
-from shared.metrics.lesion_metric import lesionwise_evaluation
 
 from models import get_model
 from frame.train import OptimizedTrainer
@@ -199,7 +198,7 @@ def evaluate(
 
     if lesion_wise:
         with open(lesion_results_file, "w") as f:
-            f.write("CaseID,LW_Dice_WT,LW_Dice_TC,LW_Dice_ET,LW_HD95_WT,LW_HD95_TC,LW_HD95_ET\n")
+            f.write("CaseID,LW_Dice_WT,LW_Dice_TC,LW_Dice_ET,LW_HD95_WT,LW_HD95_TC,LW_HD95_ET,GT_WT,FP_WT,GT_TC,FP_TC,GT_ET,FP_ET\n")
 
     print("-" * 60)
     logger.print_section("开始评估")
@@ -227,7 +226,6 @@ def evaluate(
         print("-" * 40)
 
     if runs > 1:
-        import numpy as np
         dice_wt_mean = np.mean([m['dice_wt'] for m in all_metrics])
         dice_wt_std = np.std([m['dice_wt'] for m in all_metrics])
         dice_tc_mean = np.mean([m['dice_tc'] for m in all_metrics])
