@@ -84,7 +84,7 @@ export default function FileUploader() {
   };
 
   return (
-    <Paper elevation={3} sx={{ p: 2, mb: 2 }}>
+    <Paper elevation={3} sx={{ p: 2, mb: 1.5 }}>
       {/* 标题 */}
       <Typography variant="h6" gutterBottom sx={{ color: 'var(--accent)', display: 'flex', alignItems: 'center', gap: 1 }}>
         <UploadIcon /> 文件上传

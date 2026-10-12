@@ -19,6 +19,7 @@ import {
 import { Refresh as RefreshIcon, Visibility as ViewIcon, Schedule as ScheduleIcon } from '@mui/icons-material';
 import { getJobService } from '../../services/jobs/jobService';
 import { errMessage } from '../../utils/notify';
+import { formatDate, formatTime, formatVolume } from '../../utils/format';
 import type { JobStatus as JobStatusType } from '../../types';
 import { useModeStore } from '../../store/modeStore';
 import { useIsMobile } from '../../hooks/useIsMobile';
@@ -33,32 +34,6 @@ const STATUS_MAP: Record<string, { label: string; color: 'default' | 'primary' |
   FAILED: { label: '失败', color: 'error' },
   TIMEOUT: { label: '超时', color: 'warning' },
 };
-
-/**
- * 格式化耗时：小于 1 秒显示毫秒，否则显示秒
- */
-function formatTime(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
-}
-
-/**
- * 格式化 ISO 时间为本地中文时间字符串
- */
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleString('zh-CN');
-}
-
-/**
- * 格式化体积统计映射为可读字符串
- * 例如 { WT: 123.4, TC: 45.6 } -> "WT: 123.4cm3  TC: 45.6cm3"
- */
-function formatVolume(volumes: Record<string, number> | null | undefined): string {
-  if (!volumes) return '-';
-  return Object.entries(volumes)
-    .map(([k, v]) => `${k}: ${v.toFixed(1)}cm3`)
-    .join('  ');
-}
 
 /** 单个任务卡片（移动端，避免表格横向溢出） */
 function JobCard({

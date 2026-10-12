@@ -170,7 +170,7 @@ export default function InferencePanel() {
   const selectedModelInfo = modelList.find(m => m.modelType === inference.selectedModel);
 
   return (
-    <Paper elevation={3} sx={{ p: 2, mt: 2 }}>
+    <Paper elevation={3} sx={{ p: 2, mb: 1.5 }}>
       {/* 标题 */}
       <Typography
         variant="h6"

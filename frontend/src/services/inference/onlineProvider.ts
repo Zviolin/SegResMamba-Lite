@@ -21,7 +21,7 @@ import type { InferenceProvider, SegmentationInput, SegmentationResult } from '.
 
 /**
  * 在线推理引擎实例（单例）
- * 通过 modeStore 的 useModeProvider() 在业务层获取。
+ * 业务层（hooks/useInference）按 modeStore 当前模式直接选用本实例。
  */
 export const onlineProvider: InferenceProvider = {
   id: 'online',

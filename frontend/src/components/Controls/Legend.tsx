@@ -18,7 +18,7 @@ import { LABEL_COLORS } from '../../config/labels';
  */
 export default function Legend() {
   return (
-    <Paper elevation={3} sx={{ p: 2, mt: 2 }}>
+    <Paper elevation={3} sx={{ p: 2 }}>
       {/* 图例标题 */}
       <Typography variant="subtitle2" gutterBottom>
         📊 分割标签图例

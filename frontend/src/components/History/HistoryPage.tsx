@@ -35,6 +35,7 @@ import { useViewerStore } from '../../store/viewerStore';
 import { useModeStore } from '../../store/modeStore';
 import { parseNiftiFromGzData } from '../../utils/niftiParser';
 import { notifyError, errMessage} from '../../utils/notify';
+import { formatDate, formatTime, formatVolume } from '../../utils/format';
 import type { HistoryRecord } from '../../types';
 import { useIsMobile } from '../../hooks/useIsMobile';
 import type { ChangeEvent, KeyboardEvent} from 'react';
@@ -153,31 +154,6 @@ function HistoryCard({
       </Box>
     </Paper>
   );
-}
-
-/**
- * 格式化耗时：小于 1 秒显示毫秒，否则显示秒
- */
-function formatTime(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
-}
-
-/**
- * 格式化体积统计映射为可读字符串
- */
-function formatVolume(volumes: Record<string, number> | null): string {
-  if (!volumes) return '-';
-  return Object.entries(volumes)
-    .map(([k, v]) => `${k}: ${v.toFixed(1)}cm3`)
-    .join('  ');
-}
-
-/**
- * 格式化 ISO 时间为本地中文时间字符串
- */
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleString('zh-CN');
 }
 
 /**

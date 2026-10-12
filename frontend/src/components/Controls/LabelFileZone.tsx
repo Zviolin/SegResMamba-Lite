@@ -106,7 +106,7 @@ export default function LabelFileZone() {
   const hasLabel = segData !== null || segFileInfo.status === 'ready';
 
   return (
-    <Paper elevation={3} sx={{ p: 2, mb: 2 }}>
+    <Paper elevation={3} sx={{ p: 2, mb: 1.5 }}>
       {/* 标题 */}
       <Typography variant="h6" gutterBottom sx={{ color: 'var(--accent)', display: 'flex', alignItems: 'center', gap: 1 }}>
         <LabelIcon /> 标签文件区

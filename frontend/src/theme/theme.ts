@@ -19,6 +19,14 @@ export const lightTheme: Theme = createTheme({
     primary: { main: '#008f9a' },
     background: { default: '#f5f6f8', paper: '#ffffff' },
     text: { primary: '#212121', secondary: '#5f6368' }
+  },
+  components: {
+    // 提升滑块轨道与背景的对比度（默认浅灰在白底面板上辨识度不足）
+    MuiSlider: {
+      styleOverrides: {
+        rail: { color: '#c0c4cb', height: 4 }
+      }
+    }
   }
 });
 
@@ -29,5 +37,13 @@ export const darkTheme: Theme = createTheme({
     primary: { main: '#00adb5' },
     background: { default: '#121212', paper: '#1e1e1e' },
     text: { primary: '#e0e0e0', secondary: '#888888' }
+  },
+  components: {
+    // 提升滑块轨道与深色面板的对比度（默认轨道过暗，观感"消失"）
+    MuiSlider: {
+      styleOverrides: {
+        rail: { color: '#5f5f5f', height: 4 }
+      }
+    }
   }
 });

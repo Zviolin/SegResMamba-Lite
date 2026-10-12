@@ -8,7 +8,7 @@
  *  3. 提供 toggleTheme() 供顶部按钮一键切换。
  *
  * 主题机制（两层联动）：
- *  - MUI ThemeProvider（components/theme/AppThemeProvider）控制 MUI 组件配色；
+ *  - MUI ThemeProvider（src/theme/AppThemeProvider）控制 MUI 组件配色；
  *  - index.css 中的 CSS 变量（--bg-* / --text-* / --accent）控制自定义 sx 配色。
  * 两层由本 store 的 theme 值同步驱动。
  */

@@ -20,7 +20,6 @@ import {
 import {
   DarkMode as DarkModeIcon,
   LightMode as LightModeIcon,
-  Info as InfoIcon,
   Settings as SettingsIcon,
   Help as HelpIcon,
   Home as HomeIcon,
@@ -84,9 +83,9 @@ function DesktopMainPage() {
 
   return (
     <Box sx={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-      {/* 左侧边栏 */}
+      {/* 左侧边栏（与右栏等宽 300，保证视觉对称） */}
       <Box sx={{
-        width: 280, flexShrink: 0, bgcolor: 'var(--bg-panel)',
+        width: 300, flexShrink: 0, bgcolor: 'var(--bg-panel)',
         borderRight: '1px solid var(--border)', padding: '15px',
         overflowY: 'auto', position: 'sticky', top: 56,
         alignSelf: 'flex-start', maxHeight: 'calc(100vh - 56px)'
@@ -128,9 +127,9 @@ function DesktopMainPage() {
         <MPRViewer />
       </Box>
 
-      {/* 右侧面板：两个面板默认折叠，点击展开，默认状态不记忆 */}
+      {/* 右侧面板：与左栏等宽 300，视觉对称；两个面板默认折叠 */}
       <Box sx={{
-        width: 320, flexShrink: 0, bgcolor: 'var(--bg-panel)',
+        width: 300, flexShrink: 0, bgcolor: 'var(--bg-panel)',
         borderLeft: '1px solid var(--border)', padding: '15px',
         overflowY: 'auto', position: 'sticky', top: 56,
         alignSelf: 'flex-start', maxHeight: 'calc(100vh - 56px)'
@@ -631,13 +630,6 @@ function App() {
               <SettingsIcon fontSize="small" />
             </IconButton>
           </Tooltip>
-
-          {/* 项目信息（占位） */}
-          {!isMobile && (
-            <Tooltip title="项目信息">
-              <IconButton color="inherit"><InfoIcon /></IconButton>
-            </Tooltip>
-          )}
 
           {/* 在线 / 离线模式切换开关 */}
           <ModeSwitch />
