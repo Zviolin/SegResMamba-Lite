@@ -1,0 +1,12 @@
+# 依赖与构建产物：镜像内重新安装/构建，严禁带入
+node_modules
+dist
+
+# 版本控制与本地工具
+.git
+.gitignore
+start-dev.bat
+
+# 文档与日志：运行镜像无需携带
+docs
+*.log
