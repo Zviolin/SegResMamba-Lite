@@ -1,0 +1,30 @@
+# ============================================================
+#  Docker Compose 编排：前端生产容器
+#  用法：docker compose up -d --build
+#  说明：本应用"在线模式"由浏览器直连后端（界面右上角服务器设置填写地址），
+#        与前端容器无需容器网络互通；后端（FastAPI）部署后填入设置即可。
+# ============================================================
+services:
+  frontend:
+    build: ./frontend
+    image: brain-tumor-frontend:1.0.0
+    container_name: brain-tumor-frontend
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+    # 资源限制：静态站点无需大内存，防止单容器耗尽宿主机资源
+    mem_limit: 256m
+    cpus: 0.5
+    # 日志轮转：防止日志无限增长占满磁盘
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # 健康检查：首页可访问即健康
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s

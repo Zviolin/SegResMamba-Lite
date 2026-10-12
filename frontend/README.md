@@ -29,6 +29,22 @@ npm test         # 单元测试（vitest）
 
 环境要求：Node.js 20 或 22（LTS）。
 
+## Docker 部署
+
+生产环境一键容器化（多阶段构建：Node 20 编译 → nginx 非 root 静态服务，监听 8080）：
+
+```bash
+docker compose up -d --build     # 构建镜像并启动 → http://localhost:8080
+docker compose logs -f frontend  # 查看日志
+docker compose down              # 停止并移除容器
+```
+
+- **编排入口**：仓库根目录 `docker-compose.yml`（含内存/CPU 限制、日志轮转、健康检查、自动重启）
+- **镜像内容**：`Dockerfile` 两阶段构建；`docker/nginx.conf` 提供 SPA 路由回退、gzip 压缩、WASM 正确 MIME、构建产物长缓存
+- **离线推理可用**：ONNX 模型与 ORT WASM 运行时已打包进镜像，容器内完整支持离线分割
+- **在线模式**：由浏览器直连后端（右上角服务器设置填写地址），与前端容器无需网络互通
+- 镜像内已含模型文件（约 90MB），首次拉取基础镜像后构建约 2-3 分钟
+
 ## 使用三步
 
 1. 切换到「离线」模式（顶栏开关推左）

@@ -16,11 +16,13 @@
 - react / react-dom：界面框架
 - react-router-dom：页面路由，比如 /jobs 任务页、历史记录页
 - zustand：全局状态管理
-- axios：发 HTTP 请求，在线模式连后端用
 - @mui/material、@mui/icons-material、@emotion/react、@emotion/styled：UI 组件库和样式方案
 - nifti-reader-js、pako：解析 .nii / .nii.gz 医学影像，以及解压
 - jspdf：把分析报告导出成 PDF
-- onnxruntime-web：写在依赖清单里，但**运行时实际用的是 public/vendor/ort 下的 UMD 全局**，推理引擎不是从 npm 这个包提供的，别被名字误导
+
+**HTTP 与推理引擎说明**
+- HTTP 请求全部用浏览器原生 `fetch`（统一封装在 src/services/api/apiClient.ts，带超时与错误分类），未引入 axios；
+- 推理引擎是 public/vendor/ort 下的 ORT UMD 全局（index.html 通过 script 标签加载），不走 npm 依赖。
 
 **离线资源已经随包带了，不用另下**
 public/models/ 下是分割模型（.onnx 文件），public/vendor/ort/ 下是 ORT 运行时（.js + .wasm）。这两块是浏览器离线推理必需的，已经打进压缩包，接收方不用单独下载。
